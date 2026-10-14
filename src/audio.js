@@ -4,7 +4,7 @@
    ========================================================== */
 
 // Audio assets are stored in public/audio.
-// Vite's BASE_URL ensures compatibility with GitHub Pages.
+// Vite's BASE_URL supports local development and GitHub Pages.
 
 const AUDIO_PATH = `${import.meta.env.BASE_URL}audio/`;
 
@@ -51,91 +51,203 @@ export function createAudioManager() {
   let muted = loadMutedPreference();
 
   // --------------------------------------------------------
-  // Audio Format Detection
+  // Audio Context
   // --------------------------------------------------------
 
-  const formatTester = document.createElement('audio');
+  const AudioContextClass =
+    window.AudioContext || window.webkitAudioContext;
 
-  const supportsOgg = formatTester.canPlayType(
-    'audio/ogg; codecs="vorbis"'
-  ) !== '';
+  if (!AudioContextClass) {
+    console.warn('Web Audio API is not supported.');
 
-  const extension = supportsOgg ? 'ogg' : 'mp3';
+    return {
+      play() {},
+      stopAll() {},
+      isMuted: () => muted,
+      setMuted(value) {
+        muted = Boolean(value);
+      },
+      toggleMute() {
+        muted = !muted;
+        return muted;
+      }
+    };
+  }
+
+  // Create the context lazily, after user interaction.
+  let context = null;
+
+  function getContext() {
+    if (!context) {
+      context = new AudioContextClass();
+    }
+
+    return context;
+  }
 
   // --------------------------------------------------------
-  // Sound Loading
+  // Audio Loading
   // --------------------------------------------------------
 
-  const sounds = {};
+  const buffers = new Map();
+  const loading = new Map();
 
-  for (const [name, filename] of Object.entries(SOUND_FILES)) {
-    const audio = new Audio(
-      `${AUDIO_PATH}${filename}.${extension}`
-    );
+  async function loadSound(name) {
+    if (buffers.has(name)) {
+      return buffers.get(name);
+    }
 
-    audio.preload = 'auto';
+    if (loading.has(name)) {
+      return loading.get(name);
+    }
 
-    sounds[name] = audio;
+    const filename = SOUND_FILES[name];
+
+    if (!filename) return null;
+
+    const promise = (async () => {
+      const ctx = getContext();
+
+      // MP3 is supported by modern Safari and desktop browsers.
+      const response = await fetch(
+        `${AUDIO_PATH}${filename}.mp3`
+      );
+
+      if (!response.ok) {
+        throw new Error(
+          `Could not load ${filename}.mp3: ${response.status}`
+        );
+      }
+
+      const data = await response.arrayBuffer();
+      const buffer = await ctx.decodeAudioData(data);
+
+      buffers.set(name, buffer);
+
+      return buffer;
+    })();
+
+    loading.set(name, promise);
+
+    try {
+      return await promise;
+    } finally {
+      loading.delete(name);
+    }
   }
 
   // --------------------------------------------------------
   // Active Sound Tracking
   // --------------------------------------------------------
 
-  // Keep track of currently playing audio so the mute
-  // button can stop sounds immediately.
   const activeSounds = new Set();
 
   function stopAll() {
-    for (const sound of activeSounds) {
-      sound.pause();
-      sound.currentTime = 0;
+    for (const source of activeSounds) {
+      try {
+        source.stop();
+      } catch {
+        // Source may have already finished.
+      }
     }
 
     activeSounds.clear();
   }
 
   // --------------------------------------------------------
+  // iOS Audio Activation
+  // --------------------------------------------------------
+
+  function unlockAudio() {
+    if (muted) return;
+
+    const ctx = getContext();
+
+    if (ctx.state === 'suspended') {
+      ctx.resume().catch(() => {
+        // A later user interaction can retry.
+      });
+    }
+  }
+
+  // iOS requires audio activation through user interaction.
+  // Keep these listeners so audio can recover after Safari
+  // suspends the context.
+
+  document.addEventListener('pointerdown', unlockAudio);
+  document.addEventListener('touchstart', unlockAudio, {
+    passive: true
+  });
+  document.addEventListener('keydown', unlockAudio);
+
+  // --------------------------------------------------------
   // Sound Playback
   // --------------------------------------------------------
 
-  function play(name) {
+  async function play(name) {
     if (muted) return;
 
-    const source = sounds[name];
-
-    if (!source) {
+    if (!SOUND_FILES[name]) {
       console.warn(`Unknown sound: ${name}`);
       return;
     }
 
-    // Clone the audio element to allow overlapping effects.
-    const sound = source.cloneNode(true);
+    // Capture the current generation so a pending load
+    // cannot play after mute or stopAll.
+    const generation = playbackGeneration;
 
-    sound.volume = SOUND_VOLUMES[name] ?? 0.5;
+    try {
+      const ctx = getContext();
 
-    // Track this sound until playback finishes.
-    activeSounds.add(sound);
+      if (ctx.state === 'suspended') {
+        await ctx.resume();
+      }
 
-    function cleanup() {
-      activeSounds.delete(sound);
+      const buffer = await loadSound(name);
 
-      sound.removeEventListener('ended', cleanup);
-      sound.removeEventListener('error', cleanup);
+      if (
+        muted ||
+        generation !== playbackGeneration ||
+        !buffer ||
+        ctx.state !== 'running'
+      ) {
+        return;
+      }
+
+      const source = ctx.createBufferSource();
+      const gain = ctx.createGain();
+
+      source.buffer = buffer;
+      gain.gain.value = SOUND_VOLUMES[name] ?? 0.5;
+
+      source.connect(gain);
+      gain.connect(ctx.destination);
+
+      source.onended = () => {
+        activeSounds.delete(source);
+        source.disconnect();
+        gain.disconnect();
+      };
+
+      activeSounds.add(source);
+      source.start(0);
+
+    } catch (error) {
+      console.warn(`Audio playback failed: ${name}`, error);
     }
+  }
 
-    sound.addEventListener('ended', cleanup);
-    sound.addEventListener('error', cleanup);
+  // --------------------------------------------------------
+  // Playback Cancellation
+  // --------------------------------------------------------
 
-    // Browsers may block audio until user interaction.
-    const playPromise = sound.play();
+  let playbackGeneration = 0;
 
-    if (playPromise !== undefined) {
-      playPromise.catch(() => {
-        // Playback was blocked or interrupted.
-        cleanup();
-      });
-    }
+  const originalStopAll = stopAll;
+
+  function cancelAll() {
+    playbackGeneration++;
+    originalStopAll();
   }
 
   // --------------------------------------------------------
@@ -149,9 +261,10 @@ export function createAudioManager() {
   function setMuted(value) {
     muted = Boolean(value);
 
-    // Immediately stop anything already playing.
     if (muted) {
-      stopAll();
+      cancelAll();
+    } else {
+      unlockAudio();
     }
 
     try {
@@ -160,7 +273,7 @@ export function createAudioManager() {
         String(muted)
       );
     } catch {
-      // The preference remains active for this session.
+      // Preference remains active for this session.
     }
   }
 
@@ -171,7 +284,7 @@ export function createAudioManager() {
 
   return {
     play,
-    stopAll,
+    stopAll: cancelAll,
     isMuted,
     setMuted,
     toggleMute
