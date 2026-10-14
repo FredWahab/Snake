@@ -3,7 +3,7 @@
  // Snake State and Movement
  // ==========================================================
 
- export const GRID_SIZE = 20;
+ export const GRID_SIZE = 15;
  export const TICK_RATE = 200;
 
  const STARTING_SNAKE = [

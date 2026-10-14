@@ -25,9 +25,7 @@ document.querySelector('#app').innerHTML = `
         height="600">
       </canvas>
 
-      <div id="game-status" class="game-status">
-        Press Space or a Direction Key to Start
-      </div>
+      <div id="game-status" class="game-status"></div>
     </div>
 
     <footer class="game-footer">

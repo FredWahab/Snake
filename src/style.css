@@ -100,6 +100,9 @@ body {
   font-weight: bold;
   text-align: center;
 
+  white-space: pre-line;
+  line-height: 1.8;
+
   /* Allow touch input to reach the canvas underneath. */
   pointer-events: none;
 }
@@ -130,6 +133,102 @@ body {
 .game-footer a:focus-visible {
   color: #4ade80;
   text-decoration: underline;
+}
+
+/* ==========================================================
+   Desktop Keyboard Instructions
+   ========================================================== */
+
+.start-instructions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 24px;
+  width: 100%;
+  line-height: normal;
+}
+
+.instruction-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  font-size: 1rem;
+  line-height: 1.4;
+}
+
+/* Keyboard key appearance */
+
+.key {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+
+  min-width: 32px;
+  height: 36px;
+  padding: 0 8px;
+
+  background: #465362;
+  border: 1px solid #94a3b8;
+  border-radius: 6px;
+
+  box-shadow:
+    0 3px 0 #26313d,
+    0 4px 8px rgba(0, 0, 0, 0.3);
+
+  color: #ffffff;
+  font-size: 0.9rem;
+  font-weight: 700;
+  line-height: 1;
+
+  box-sizing: border-box;
+  flex-shrink: 0;
+}
+
+/* Spacebar */
+
+.space-key {
+  min-width: 85px;
+}
+
+/* Directional arrow key layout */
+
+.arrow-keys {
+  display: grid;
+  grid-template-columns: repeat(3, 36px);
+  grid-template-rows: repeat(2, 36px);
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.arrow-keys .key {
+  width: 36px;
+  height: 36px;
+  min-width: 36px;
+  padding: 0;
+}
+
+/* Individual arrow positions */
+
+.arrow-up {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.arrow-left {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+.arrow-down {
+  grid-column: 2;
+  grid-row: 2;
+}
+
+.arrow-right {
+  grid-column: 3;
+  grid-row: 2;
 }
 
 /* ==========================================================

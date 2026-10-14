@@ -17,6 +17,53 @@ import { createRenderer } from './renderer.js';
 export function createGame(canvas, scoreDisplay, statusDisplay) {
   const renderer = createRenderer(canvas);
 
+  // ==========================================================
+  // Device-Aware Instructions
+  // ==========================================================
+
+  function isTouchDevice() {
+    return window.matchMedia('(pointer: coarse)').matches;
+  }
+
+  function getStartMessage() {
+    return isTouchDevice()
+      ? 'Tap to Start\nSwipe to Move'
+      : '';
+  }
+
+  function getPauseMessage() {
+    return isTouchDevice()
+      ? 'Paused\nTap to Resume'
+      : `
+        <div class="start-instructions">
+          <div>Paused</div>
+          <div class="instruction-row">
+            <span class="key space-key">SPACE</span>
+            <span>to Resume</span>
+          </div>
+        </div>
+      `;
+  }
+
+  function getEndMessage(won) {
+    const result = won ? 'You Win!' : 'Game Over!';
+
+    if (isTouchDevice()) {
+      return `${result}\nScore: ${score}\nTap to Restart`;
+    }
+
+    return `
+      <div class="start-instructions">
+        <div>${result}</div>
+        <div>Score: ${score}</div>
+        <div class="instruction-row">
+          <span class="key space-key">SPACE</span>
+          <span>to Restart</span>
+        </div>
+      </div>
+    `;
+  }
+
   let food = null;
   let score = 0;
   let gameState = 'ready';
@@ -82,9 +129,11 @@ export function createGame(canvas, scoreDisplay, statusDisplay) {
 
     gameState = 'paused';
 
-    statusDisplay.textContent =
-      'Paused — Space or Tap to Resume';
-
+    if (isTouchDevice()) {
+      statusDisplay.textContent = getPauseMessage();
+    } else {
+      statusDisplay.innerHTML = getPauseMessage();
+    }
     statusDisplay.classList.remove('hidden');
   }
 
@@ -93,10 +142,11 @@ export function createGame(canvas, scoreDisplay, statusDisplay) {
 
     elapsedTime = 0;
 
-    statusDisplay.textContent = won
-      ? `You Win! Score: ${score} — Press Space or Tap to Restart`
-      : `Game Over! Score: ${score} — Press Space or Tap to Restart`;
-
+    if (isTouchDevice()) {
+      statusDisplay.textContent = getEndMessage(won);
+    } else {
+      statusDisplay.innerHTML = getEndMessage(won);
+    }
     statusDisplay.classList.remove('hidden');
   }
 
@@ -209,8 +259,28 @@ export function createGame(canvas, scoreDisplay, statusDisplay) {
   function initialize() {
     resetGame();
 
-    statusDisplay.textContent =
-      'Press Space or a Direction Key to Start';
+    if (isTouchDevice()) {
+      statusDisplay.textContent = getStartMessage();
+    } else {
+      statusDisplay.innerHTML = `
+        <div class="start-instructions">
+          <div class="instruction-row">
+            <span class="key space-key">SPACE</span>
+            <span>to Start</span>
+          </div>
+
+          <div class="instruction-row">
+            <div class="arrow-keys">
+              <span class="key arrow-up">↑</span>
+              <span class="key arrow-left">←</span>
+              <span class="key arrow-down">↓</span>
+              <span class="key arrow-right">→</span>
+            </div>
+            <span>to Move</span>
+          </div>
+        </div>
+      `;
+    }
 
     statusDisplay.classList.remove('hidden');
 
