@@ -22,7 +22,8 @@ export function createGame(
   canvas,
   scoreDisplay,
   statusDisplay,
-  highScoreDisplay = null
+  highScoreDisplay = null,
+  audio = null
 ) {
   const renderer = createRenderer(canvas);
 
@@ -56,6 +57,10 @@ export function createGame(
   let food = null;
   let score = 0;
   let highScore = loadHighScore();
+
+  // Remember the record that existed when this run began.
+  let previousBest = highScore;
+  let highScoreCelebrated = false;
 
   // ready, running, paused, dying, gameover
   let gameState = 'ready';
@@ -312,7 +317,9 @@ export function createGame(
       gameStarted,
       gameWon,
       activeLayout,
-      elapsedTime
+      elapsedTime,
+      previousBest,
+      highScoreCelebrated
     };
   }
 
@@ -323,6 +330,9 @@ export function createGame(
     score = saved.score;
     gameStarted = saved.gameStarted;
     gameWon = saved.gameWon;
+
+    previousBest = saved.previousBest;
+    highScoreCelebrated = saved.highScoreCelebrated;
 
     activeLayout = saved.activeLayout;
     displayedLayout = saved.activeLayout;
@@ -451,6 +461,8 @@ export function createGame(
       return;
     }
 
+    const resuming = gameState === 'paused';
+
     if (gameState === 'gameover') {
       resetGame();
     }
@@ -462,6 +474,9 @@ export function createGame(
 
     lastFrameTime = null;
     elapsedTime = 0;
+
+    // Play the appropriate start or resume effect.
+    audio?.play(resuming ? 'resume' : 'start');
   }
 
   function pauseGame() {
@@ -469,6 +484,8 @@ export function createGame(
 
     gameState = 'paused';
     showPauseMessage();
+
+    audio?.play('pause');
   }
 
   function endGame(won = false) {
@@ -479,6 +496,9 @@ export function createGame(
     collisionStartTime = null;
 
     showEndMessage(won);
+
+    // Separate victory and game-over sounds.
+    audio?.play(won ? 'victory' : 'gameOver');
   }
 
   // ========================================================
@@ -496,6 +516,9 @@ export function createGame(
     // Trigger the renderer's recoil, flash,
     // and X-shaped eyes.
     renderer.triggerCollision(timestamp);
+
+    // Play the collision sound alongside the animation.
+    audio?.play('collision');
 
     // Leave the board unobstructed until the
     // collision animation has finished.
@@ -527,6 +550,10 @@ export function createGame(
     score = 0;
     gameStarted = false;
     gameWon = false;
+
+    // Reset record tracking for this run.
+    previousBest = highScore;
+    highScoreCelebrated = false;
 
     updateScoreDisplay();
 
@@ -598,8 +625,11 @@ export function createGame(
     if (result.ateFood) {
       score++;
 
-      // Tell the renderer to animate the bite.
+      // Keep our earlier bite animation timing.
       renderer.triggerEat(timestamp - 100);
+
+      // Play the eating effect.
+      audio?.play('eat');
 
       if (score > highScore) {
         highScore = score;
@@ -613,6 +643,18 @@ export function createGame(
         endGame(true);
       } else {
         spawnFood();
+      }
+
+      // Celebrate once when the current run first
+      // beats the record that existed at its start.
+      if (
+        !highScoreCelebrated &&
+        previousBest > 0 &&
+        score > previousBest &&
+        !result.won
+      ) {
+        highScoreCelebrated = true;
+        audio?.play('highScore');
       }
     }
   }

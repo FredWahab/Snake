@@ -1,30 +1,22 @@
 # Snake
 
-A modern take on the classic Snake game, built with vanilla JavaScript and HTML5 Canvas.
+A modern take on the classic Snake arcade game, built with vanilla JavaScript and the HTML5 Canvas API.
 
-Guide the snake around the board, collect food to increase your score, and grow as long as possible without colliding with the walls or your own body.
-
-This version features smooth, continuous movement, rounded turns, animated growth, and responsive controls for both desktop and mobile devices.
+Guide the snake around the board, collect glowing food to grow and increase your score, and avoid colliding with the walls or your own body. This version combines traditional grid-based gameplay with smooth continuous animation, an expressive snake character, sound effects, and responsive controls for desktop and mobile devices.
 
 **[Play Snake](https://fredwahab.github.io/Snake/)**
 
-![Snake gameplay showing the snake moving around the grid and collecting orbs.](assets/gameplay.png)
+![Snake gameplay showing the animated snake on the game board.](assets/gameplay.png)
 
 ## How to Play
 
-The objective is simple: eat food, grow longer, and survive.
-
-- Collect the glowing blue food to earn points.
-- Each piece of food increases your score and the snake's length.
-- Avoid running into the walls or your own body.
-- The game ends when a collision occurs.
-- Fill the entire board to win!
+Collect food to earn points and grow longer. Avoid hitting walls or your own body. The game ends when you collide; fill the entire board to win.
 
 ### Desktop Controls
 
 | Key | Action |
-|---|---|
-| Arrow Keys | Change direction |
+| --- | --- |
+| Arrow keys | Change direction |
 | W / A / S / D | Change direction |
 | Spacebar | Start, pause, resume, or restart |
 
@@ -33,38 +25,42 @@ The snake cannot reverse directly into itself.
 ### Mobile Controls
 
 | Gesture | Action |
-|---|---|
-| Swipe Up | Move up |
-| Swipe Down | Move down |
-| Swipe Left | Move left |
-| Swipe Right | Move right |
-| Tap Board | Start, pause, resume, or restart |
+| --- | --- |
+| Swipe up / down / left / right | Change direction |
+| Tap game board | Start, pause, resume, or restart |
 
-The game is designed to work with touchscreen devices without requiring on-screen directional buttons.
+Mobile play uses swipe and tap input rather than on-screen directional buttons. The board adapts to portrait and landscape orientations.
+
+### Sound
+
+Use the speaker button in the game header to turn sound on or off. Your mute preference is saved between visits. Muting also stops sounds already playing.
 
 ## Features
 
-- **Classic Snake Gameplay** — Collect food, increase your score, and avoid collisions.
-- **Smooth Movement** — Continuous animation between grid positions rather than abrupt cell-by-cell movement.
-- **Rounded Corners** — The snake follows a continuous route through turns.
-- **Animated Growth** — The body extends naturally when food is collected.
-- **Responsive Design** — A scalable game board for desktop and mobile screens.
-- **Touchscreen Support** — Swipe-based movement and tap controls.
-- **Pause and Resume** — Pause gameplay and continue when ready.
-- **Collision Detection** — Handles wall collisions, self-collisions, and movement into cells vacated by the tail.
-- **Random Food Placement** — Food spawns only in unoccupied cells.
-- **Win and Game-Over States** — Clear feedback when the game ends.
-- **No Gameplay Dependencies** — Built using standard browser APIs.
+- **Classic Snake gameplay** — Collect food, grow longer, avoid collisions, and fill the board to win.
+- **Smooth movement** — The snake interpolates between grid positions rather than jumping abruptly between cells.
+- **Continuous rounded body** — A path-based Canvas renderer creates connected sections and curved turns.
+- **Expressive animations** — The snake blinks, flicks its tongue, reacts when eating, and recoils on collision.
+- **Animated food** — Glowing food appears in random unoccupied cells, with varied colors.
+- **Color progression** — The snake transitions through a palette as the score increases.
+- **Scoring and records** — Current score and a persistent high score are displayed.
+- **Pause, resume, and restart** — Available through keyboard and touchscreen controls.
+- **Responsive layouts** — Distinct desktop, mobile portrait, and mobile landscape board dimensions.
+- **Orientation handling** — An in-progress game is preserved when the device orientation changes and can be resumed after rotating back.
+- **Sound effects** — Eight effects cover starting, eating, pausing, resuming, collisions, game over, high scores, and victory.
+- **Persistent mute control** — The speaker button saves the setting and immediately stops active audio when muted.
+- **No gameplay framework** — Core gameplay uses standard JavaScript and browser APIs.
 
 ## Technologies Used
 
-- **HTML5** — Page structure and canvas element
-- **CSS3** — Responsive layout and visual styling
-- **JavaScript (ES Modules)** — Game logic, animation, and input handling
-- **Canvas 2D API** — Rendering the game board and animated objects
-- **Vite** — Development server and production build tooling
+- **HTML5** — Document structure and game canvas
+- **CSS3** — Responsive layout, interface styling, and orientation-specific presentation
+- **JavaScript (ES modules)** — Game state, movement, input, rendering, and audio management
+- **Canvas 2D API** — Grid, snake, food, and frame-by-frame animations
+- **Web Audio elements** — Sound-effect playback with MP3/OGG support
+- **Vite** — Local development and optimized production builds
 - **GitHub Actions** — Automated build and deployment
-- **GitHub Pages** — Static website hosting
+- **GitHub Pages** — Static hosting
 
 ## Project Structure
 
@@ -73,12 +69,26 @@ Snake/
 ├── .github/
 │   └── workflows/
 │       └── deploy.yml
+├── assets/
+│   └── gameplay.png
+├── public/
+│   ├── audio/
+│   │   ├── start.mp3 / start.ogg
+│   │   ├── eat.mp3 / eat.ogg
+│   │   ├── pause.mp3 / pause.ogg
+│   │   ├── resume.mp3 / resume.ogg
+│   │   ├── collision.mp3 / collision.ogg
+│   │   ├── game-over.mp3 / game-over.ogg
+│   │   ├── high-score.mp3 / high-score.ogg
+│   │   └── victory.mp3 / victory.ogg
+│   └── favicon.svg
 ├── src/
 │   ├── main.js
 │   ├── game.js
 │   ├── snake.js
 │   ├── renderer.js
 │   ├── input.js
+│   ├── audio.js
 │   └── style.css
 ├── index.html
 ├── package.json
@@ -89,72 +99,63 @@ Snake/
 ### JavaScript Modules
 
 | File | Responsibility |
-|---|---|
-| `main.js` | Creates the interface and initializes the game |
-| `game.js` | Manages game states, scoring, food spawning, and the game loop |
-| `snake.js` | Handles movement, direction changes, collision detection, growth, and path history |
-| `renderer.js` | Draws the board, food, and continuously animated snake |
-| `input.js` | Handles keyboard and touchscreen controls |
+| --- | --- |
+| `main.js` | Creates the interface, wires up the mute button, and initializes the game |
+| `game.js` | Manages game states, scores, food spawning, orientation changes, and the game loop |
+| `snake.js` | Handles movement, queued directions, collisions, growth, and path history |
+| `renderer.js` | Draws the grid, animated food, continuous snake body, and expressive head |
+| `input.js` | Handles desktop keyboard and touchscreen gestures |
+| `audio.js` | Loads and plays effects, controls overlapping audio, and persists mute settings |
 
-This modular structure separates game rules from rendering and input handling, making the code easier to maintain and extend.
+The modules separate game rules, display, input, and audio so each system can be maintained independently.
 
 ## Technical Implementation
 
 ### Grid-Based Game Logic
 
-The game uses a 20 × 20 logical grid.
+Snake uses a logical grid with dimensions chosen for the current layout:
 
-The snake is represented as an array of coordinate objects, with the first element representing the head.
+| Layout | Grid dimensions |
+| --- | --- |
+| Desktop | 15 × 15 |
+| Mobile portrait | 10 × 16 |
+| Mobile landscape | 18 × 10 |
 
-Movement occurs at fixed intervals of 200 milliseconds. During each update, the game calculates the next head position, checks for collisions, and updates the snake's occupied cells.
+The snake is represented by grid coordinates, with its head at the front of the body. Movement and collision detection operate at a fixed logical tick rate, independent of rendering frames. Food appears only in unoccupied cells.
 
-This approach keeps collision detection and food placement predictable and independent of the rendering frame rate.
+### Smooth Animation and Rounded Paths
 
-### Smooth Animation
+The game uses `requestAnimationFrame()` to draw frames between logical movement updates. The renderer interpolates the snake's head and tail positions, producing continuous-looking motion without changing the discrete rules of the game.
 
-Although the game logic operates on discrete grid coordinates, the visual animation uses `requestAnimationFrame()` to render intermediate positions.
+Rather than drawing disconnected body segments, the renderer builds a continuous route from the snake's position history. Rounded line joins and quadratic curves smooth the path through turns.
 
-The renderer calculates movement progress between logical updates, allowing the snake to appear to move continuously across the board.
+### Animated Growth and Head Details
 
-This separates the game's simulation rate from its visual frame rate.
+When food is collected, the snake's logical length increases. Its tail remains in place during that growth step while the head advances, making the extension look natural.
 
-### Path-Based Snake Rendering
-
-Rather than drawing each body segment as an independent moving object, the game maintains a history of positions traveled by the snake's head.
-
-The renderer uses this history to construct a continuous path for the body.
-
-Canvas strokes and quadratic curves create connected body sections and rounded corners.
-
-This approach provides smooth movement around turns while preserving the underlying grid-based gameplay.
-
-### Animated Growth
-
-When the snake eats food, its logical length increases immediately.
-
-The renderer handles the visual transition separately. During the growth movement, the tail remains stationary while the head continues forward.
-
-This causes the snake to extend naturally instead of instantly displaying an additional full-length segment.
+The head is rendered as a rounded ellipse oriented in the direction of travel, with blinking eyes, an occasional forked tongue, a brief eating reaction, and a collision animation with recoil and X-shaped eyes. The snake also cycles through different colors as the score increases.
 
 ### Collision Detection
 
-Collision checks occur before the snake's position is updated.
+Before updating the snake's position, the game checks for:
 
-The game detects:
+- Movement beyond a board boundary
+- Movement into a body cell
+- Legal movement into the current tail cell when the tail is moving away
 
-- Movement beyond the board boundaries
-- Movement into an occupied body cell
-- Legal movement into the tail's current cell when that tail is moving away
+A collision triggers a short visual and audio reaction before the game-over state is displayed.
 
-This preserves traditional Snake behavior while avoiding incorrect self-collisions.
+### Input and Responsive Layouts
 
-### Input Handling
+The input module supports Arrow keys, WASD, Spacebar, taps, and directional swipes. Direction changes are queued and limited to one accepted turn per movement interval to prevent invalid rapid reversals.
 
-Keyboard and touchscreen input are processed through a dedicated input module.
+Board dimensions adapt to desktop, mobile portrait, and mobile landscape. When an active game is interrupted by an orientation change, its state is preserved; the player can rotate back to return to it or start a new game in the new orientation.
 
-Direction changes are queued and applied during logical movement updates.
+### Audio Management
 
-Only one direction change is accepted per movement interval, preventing rapid inputs from producing invalid turns.
+The audio manager loads effects from `public/audio/`, choosing OGG when supported and otherwise using MP3. It permits overlapping sound effects and assigns individual volume levels. The mute preference is stored in `localStorage`, and muting stops any sounds currently playing.
+
+The same browser storage mechanism preserves the high score.
 
 ## Running Locally
 
@@ -163,23 +164,11 @@ Only one direction change is accepted per movement interval, preventing rapid in
 - Node.js
 - npm
 
-### Installation
-
-Clone the repository:
+Clone the repository and install dependencies:
 
 ```bash
 git clone https://github.com/fredwahab/Snake.git
-```
-
-Navigate to the project directory:
-
-```bash
 cd Snake
-```
-
-Install dependencies:
-
-```bash
 npm install
 ```
 
@@ -189,19 +178,15 @@ Start the development server:
 npm run dev
 ```
 
-Open the local URL displayed in your terminal.
+Open the local address printed in the terminal.
 
 ### Production Build
-
-Generate the optimized production files:
 
 ```bash
 npm run build
 ```
 
-The compiled application will be placed in the `dist/` directory.
-
-To preview the production build locally:
+Vite generates the production site in `dist/`. To test that build locally:
 
 ```bash
 npm run preview
@@ -209,52 +194,23 @@ npm run preview
 
 ## Deployment
 
-Snake is hosted on GitHub Pages and deployed automatically using GitHub Actions.
+Snake is hosted on GitHub Pages and deployed using GitHub Actions. The deployment workflow builds the Vite application and publishes the compiled site when changes are pushed to the `main` branch.
 
-When changes are pushed to the `main` branch, the deployment workflow:
+The production base path is `/Snake/` so JavaScript, CSS, the favicon, and audio assets resolve correctly under the repository's GitHub Pages URL.
 
-1. Checks out the repository.
-2. Installs Node.js and project dependencies.
-3. Builds the application using Vite.
-4. Uploads the production build.
-5. Deploys the game to GitHub Pages.
-
-The Vite configuration uses `/Snake/` as the production base path to ensure JavaScript and CSS assets load correctly from the repository's GitHub Pages URL.
-
-**Live Game:** https://fredwahab.github.io/Snake/
+**Live game:** https://fredwahab.github.io/Snake/
 
 ## Future Improvements
 
-The current version is fully playable. Potential future enhancements include:
-
-- Additional visual effects and animation polish
-- Further mobile layout refinements
-- Optional sound effects
-- Additional customization and presentation options
-
-These are potential enhancements rather than requirements for the core game.
+Snake v1 is a complete, playable release. Potential future additions include optional themes, new game modes, achievements, or extra presentation polish. None are required for the current gameplay experience.
 
 ## About This Project
 
-Snake is part of a collection of browser-based games developed to practice and demonstrate JavaScript programming, game development, and front-end engineering.
+Snake is part of my browser games portfolio. I developed it to practice and demonstrate JavaScript programming, browser game architecture, HTML5 Canvas rendering, responsive design, and front-end deployment.
 
-The project began as a traditional grid-based Snake implementation and evolved to include a modular architecture and a continuous path-based animation system.
-
-Particular attention was given to separating gameplay logic from visual presentation, improving code organization, and supporting both desktop and touchscreen interaction.
-
-The project demonstrates practical experience with:
-
-- JavaScript ES modules
-- HTML5 Canvas rendering
-- Game loops and frame-based animation
-- Collision detection and state management
-- Responsive web design
-- Touchscreen input handling
-- Vite production builds
-- Automated deployment with GitHub Actions
+The project evolved from a traditional grid-based Snake implementation into a more expressive arcade game with continuous path rendering, independent animation and simulation, responsive input, persistent state, and an audio system.
 
 ---
 
-**Developed by [Fred Wahab](https://fredwahab.com)**
-
+**Developed by [Fred Wahab](https://fredwahab.com)**  
 Part of my browser games portfolio.
