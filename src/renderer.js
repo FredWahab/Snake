@@ -1,6 +1,6 @@
 
 import {
-  GRID_SIZE,
+  getGridDimensions,
   getSnakePath,
   getSnakeLength,
   getSnakeDirection,
@@ -13,23 +13,77 @@ import {
 
 export function createRenderer(canvas) {
   const ctx = canvas.getContext('2d');
-  const CELL_SIZE = canvas.width / GRID_SIZE;
 
-  const BODY_COLOR = '#4ade80';
-  const HEAD_COLOR = '#6ee7a0';
   const GRID_COLOR = '#35414d';
-
-  // Radius of rounded turns in grid-cell units.
   const CORNER_RADIUS = 0.35;
 
+  // Snake changes color every 10 points.
+  const SNAKE_COLORS = [
+    '#4ade80', // Green
+    '#38bdf8', // Blue
+    '#a78bfa', // Purple
+    '#f472b6', // Pink
+    '#fbbf24'  // Gold
+  ];
+
+  const COLOR_TRANSITION_DURATION = 1000;
+
+  let currentColor = SNAKE_COLORS[0];
+  let previousColor = SNAKE_COLORS[0];
+  let targetColor = SNAKE_COLORS[0];
+  let transitionStart = 0;
+
   // ========================================================
-  // Coordinate Helpers
+  // Head Animation Configuration
   // ========================================================
 
-  function toCanvas(point) {
+  const BLINK_DURATION = 170;
+  const TONGUE_DURATION = 420;
+  const EAT_DURATION = 320;
+  const COLLISION_DURATION = 750;
+
+  const HEAD_EYE_COLOR = '#17212b';
+  const TONGUE_COLOR = '#fb7185';
+
+  let nextBlinkTime = 0;
+  let blinkStartTime = -1;
+
+  let nextTongueTime = 0;
+  let tongueStartTime = -1;
+
+  let eatStartTime = -1;
+  let collisionStartTime = -1;
+
+  // ========================================================
+  // General Helpers
+  // ========================================================
+
+  function clamp(value, min = 0, max = 1) {
+    return Math.max(min, Math.min(max, value));
+  }
+
+  function randomBetween(min, max) {
+    return min + Math.random() * (max - min);
+  }
+
+  function smoothstep(value) {
+    const t = clamp(value);
+    return t * t * (3 - 2 * t);
+  }
+
+  function getCellSize() {
+    const { cols, rows } = getGridDimensions();
+
+    return Math.min(
+      canvas.width / cols,
+      canvas.height / rows
+    );
+  }
+
+  function toCanvas(point, cellSize) {
     return {
-      x: point.x * CELL_SIZE + CELL_SIZE / 2,
-      y: point.y * CELL_SIZE + CELL_SIZE / 2
+      x: point.x * cellSize + cellSize / 2,
+      y: point.y * cellSize + cellSize / 2
     };
   }
 
@@ -41,20 +95,197 @@ export function createRenderer(canvas) {
   }
 
   // ========================================================
+  // Color Helpers
+  // ========================================================
+
+  function hexToRgb(hex) {
+    const value = hex.replace('#', '');
+
+    return {
+      r: parseInt(value.substring(0, 2), 16),
+      g: parseInt(value.substring(2, 4), 16),
+      b: parseInt(value.substring(4, 6), 16)
+    };
+  }
+
+  function rgbToHex({ r, g, b }) {
+    return '#' + [r, g, b]
+      .map(value =>
+        Math.round(value).toString(16).padStart(2, '0')
+      )
+      .join('');
+  }
+
+  function blendColors(start, end, amount) {
+    const a = hexToRgb(start);
+    const b = hexToRgb(end);
+    const t = clamp(amount);
+
+    return rgbToHex({
+      r: a.r + (b.r - a.r) * t,
+      g: a.g + (b.g - a.g) * t,
+      b: a.b + (b.b - a.b) * t
+    });
+  }
+
+  function updateSnakeColor(score, timestamp) {
+    const colorIndex =
+      Math.floor(score / 10) % SNAKE_COLORS.length;
+
+    const nextColor = SNAKE_COLORS[colorIndex];
+
+    if (nextColor !== targetColor) {
+      previousColor = currentColor;
+      targetColor = nextColor;
+      transitionStart = timestamp;
+    }
+
+    const progress = clamp(
+      (timestamp - transitionStart) /
+      COLOR_TRANSITION_DURATION
+    );
+
+    currentColor = blendColors(
+      previousColor,
+      targetColor,
+      smoothstep(progress)
+    );
+
+    return currentColor;
+  }
+
+  // ========================================================
+  // Head Animation State
+  // ========================================================
+
+  function updateHeadAnimations(timestamp) {
+    // Schedule blinking at irregular intervals.
+    if (nextBlinkTime === 0) {
+      nextBlinkTime = timestamp + randomBetween(1800, 4800);
+    }
+
+    if (
+      blinkStartTime < 0 &&
+      timestamp >= nextBlinkTime
+    ) {
+      blinkStartTime = timestamp;
+    }
+
+    if (
+      blinkStartTime >= 0 &&
+      timestamp - blinkStartTime >= BLINK_DURATION
+    ) {
+      blinkStartTime = -1;
+      nextBlinkTime = timestamp + randomBetween(1800, 4800);
+    }
+
+    // Schedule tongue flicks independently.
+    if (nextTongueTime === 0) {
+      nextTongueTime = timestamp + randomBetween(1400, 4200);
+    }
+
+    if (
+      tongueStartTime < 0 &&
+      timestamp >= nextTongueTime
+    ) {
+      tongueStartTime = timestamp;
+    }
+
+    if (
+      tongueStartTime >= 0 &&
+      timestamp - tongueStartTime >= TONGUE_DURATION
+    ) {
+      tongueStartTime = -1;
+      nextTongueTime = timestamp + randomBetween(1400, 4200);
+    }
+  }
+
+  function getBlinkAmount(timestamp) {
+    if (blinkStartTime < 0) return 0;
+
+    const progress = clamp(
+      (timestamp - blinkStartTime) / BLINK_DURATION
+    );
+
+    // Close and reopen in a single animation.
+    return Math.sin(progress * Math.PI);
+  }
+
+  function getTongueAmount(timestamp) {
+    if (tongueStartTime < 0) return 0;
+
+    const progress = clamp(
+      (timestamp - tongueStartTime) / TONGUE_DURATION
+    );
+
+    // Fast extension followed by retraction.
+    return Math.sin(progress * Math.PI);
+  }
+
+  function getEatAmount(timestamp) {
+    if (eatStartTime < 0) return 0;
+
+    const progress =
+      (timestamp - eatStartTime) / EAT_DURATION;
+
+    if (progress >= 1) {
+      eatStartTime = -1;
+      return 0;
+    }
+
+    return Math.sin(clamp(progress) * Math.PI);
+  }
+
+  function getCollisionProgress(timestamp) {
+    if (collisionStartTime < 0) return -1;
+
+    return clamp(
+      (timestamp - collisionStartTime) /
+      COLLISION_DURATION
+    );
+  }
+
+  function triggerEat(timestamp = performance.now()) {
+    eatStartTime = timestamp;
+  }
+
+  function triggerCollision(timestamp = performance.now()) {
+    collisionStartTime = timestamp;
+    eatStartTime = -1;
+    tongueStartTime = -1;
+  }
+
+  function resetHeadAnimations() {
+    nextBlinkTime = 0;
+    blinkStartTime = -1;
+
+    nextTongueTime = 0;
+    tongueStartTime = -1;
+
+    eatStartTime = -1;
+    collisionStartTime = -1;
+  }
+
+  // ========================================================
   // Grid Rendering
   // ========================================================
 
-  function drawGrid() {
+  function drawGrid(cellSize) {
+    const { cols, rows } = getGridDimensions();
+
     ctx.strokeStyle = GRID_COLOR;
     ctx.lineWidth = 1;
-
     ctx.beginPath();
 
-    for (let i = 1; i < GRID_SIZE; i++) {
-      const position = i * CELL_SIZE;
+    for (let x = 1; x < cols; x++) {
+      const position = x * cellSize;
 
       ctx.moveTo(position, 0);
       ctx.lineTo(position, canvas.height);
+    }
+
+    for (let y = 1; y < rows; y++) {
+      const position = y * cellSize;
 
       ctx.moveTo(0, position);
       ctx.lineTo(canvas.width, position);
@@ -67,7 +298,7 @@ export function createRenderer(canvas) {
   // Rounded Path Geometry
   // ========================================================
 
-  function drawRoundedPath(points) {
+  function drawRoundedPath(points, cellSize) {
     if (points.length === 0) return;
 
     ctx.beginPath();
@@ -99,37 +330,34 @@ export function createRenderer(canvas) {
 
       const inX = dx1 / length1;
       const inY = dy1 / length1;
+
       const outX = dx2 / length2;
       const outY = dy2 / length2;
 
       const cross = inX * outY - inY * outX;
       const dot = inX * outX + inY * outY;
 
-      // Straight section: no curve needed.
       if (Math.abs(cross) < 0.001 || dot < -0.999) {
         ctx.lineTo(current.x, current.y);
         continue;
       }
 
       const radius = Math.min(
-        CORNER_RADIUS * CELL_SIZE,
+        CORNER_RADIUS * cellSize,
         length1 / 2,
         length2 / 2
       );
 
-      const entryX = current.x - inX * radius;
-      const entryY = current.y - inY * radius;
-
-      const exitX = current.x + outX * radius;
-      const exitY = current.y + outY * radius;
-
-      ctx.lineTo(entryX, entryY);
+      ctx.lineTo(
+        current.x - inX * radius,
+        current.y - inY * radius
+      );
 
       ctx.quadraticCurveTo(
         current.x,
         current.y,
-        exitX,
-        exitY
+        current.x + outX * radius,
+        current.y + outY * radius
       );
     }
 
@@ -138,20 +366,296 @@ export function createRenderer(canvas) {
   }
 
   // ========================================================
+  // Eye Rendering
+  // ========================================================
+
+  function drawEyes(
+    cellSize,
+    blinkAmount,
+    collisionProgress
+  ) {
+    const eyeX = cellSize * 0.16;
+    const eyeY = cellSize * 0.19;
+    const eyeRadius = cellSize * 0.085;
+
+    ctx.strokeStyle = HEAD_EYE_COLOR;
+    ctx.fillStyle = HEAD_EYE_COLOR;
+    ctx.lineCap = 'round';
+
+    for (const side of [-1, 1]) {
+      const y = eyeY * side;
+
+      // X eyes after a collision.
+      if (collisionProgress >= 0) {
+        const size = eyeRadius * 0.85;
+
+        ctx.lineWidth = cellSize * 0.065;
+        ctx.beginPath();
+
+        ctx.moveTo(eyeX - size, y - size);
+        ctx.lineTo(eyeX + size, y + size);
+
+        ctx.moveTo(eyeX + size, y - size);
+        ctx.lineTo(eyeX - size, y + size);
+
+        ctx.stroke();
+        continue;
+      }
+
+      // Closed eyelid.
+      if (blinkAmount > 0.85) {
+        ctx.lineWidth = cellSize * 0.06;
+        ctx.beginPath();
+
+        ctx.moveTo(eyeX - eyeRadius, y);
+        ctx.quadraticCurveTo(
+          eyeX,
+          y + side * eyeRadius * 0.4,
+          eyeX + eyeRadius,
+          y
+        );
+
+        ctx.stroke();
+        continue;
+      }
+
+      // Animated eye height during blinking.
+      const eyeHeight = Math.max(
+        eyeRadius * 0.08,
+        eyeRadius * (1 - blinkAmount)
+      );
+
+      ctx.beginPath();
+      ctx.ellipse(
+        eyeX,
+        y,
+        eyeRadius,
+        eyeHeight,
+        0,
+        0,
+        Math.PI * 2
+      );
+      ctx.fill();
+
+      // Small highlight when the eyes are open.
+      if (blinkAmount < 0.3) {
+        ctx.fillStyle = '#ffffff';
+        ctx.beginPath();
+
+        ctx.arc(
+          eyeX + eyeRadius * 0.25,
+          y - eyeRadius * 0.3,
+          eyeRadius * 0.22,
+          0,
+          Math.PI * 2
+        );
+
+        ctx.fill();
+        ctx.fillStyle = HEAD_EYE_COLOR;
+      }
+    }
+  }
+
+  // ========================================================
+  // Tongue Rendering
+  // ========================================================
+
+  function drawTongue(cellSize, amount) {
+    if (amount <= 0.01) return;
+
+    const baseX = cellSize * 0.39;
+    const length = cellSize * 0.32 * amount;
+
+    const tipX = baseX + length;
+    const forkLength = cellSize * 0.11 * amount;
+
+    ctx.strokeStyle = TONGUE_COLOR;
+    ctx.lineWidth = cellSize * 0.055;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+
+    ctx.beginPath();
+    ctx.moveTo(baseX, 0);
+    ctx.lineTo(tipX, 0);
+
+    ctx.moveTo(tipX - forkLength * 0.4, 0);
+    ctx.lineTo(tipX + forkLength, -forkLength * 0.6);
+
+    ctx.moveTo(tipX - forkLength * 0.4, 0);
+    ctx.lineTo(tipX + forkLength, forkLength * 0.6);
+
+    ctx.stroke();
+  }
+
+  // ========================================================
+  // Mouth Rendering
+  // ========================================================
+
+  function drawMouth(cellSize, eatAmount) {
+    if (eatAmount <= 0.01) return;
+
+    const mouthX = cellSize * 0.4;
+    const mouthWidth = cellSize * 0.12;
+    const mouthHeight = cellSize * 0.24 * eatAmount;
+
+    ctx.fillStyle = '#6b2737';
+
+    ctx.beginPath();
+    ctx.ellipse(
+      mouthX,
+      0,
+      mouthWidth,
+      mouthHeight,
+      0,
+      0,
+      Math.PI * 2
+    );
+
+    ctx.fill();
+  }
+
+  // ========================================================
+  // Animated Head Rendering
+  // ========================================================
+
+  function drawHead(
+    head,
+    facing,
+    cellSize,
+    bodyColor,
+    timestamp
+  ) {
+    const collisionProgress =
+      getCollisionProgress(timestamp);
+
+    const isColliding = collisionProgress >= 0;
+
+    const blinkAmount = isColliding
+      ? 0
+      : getBlinkAmount(timestamp);
+
+    const tongueAmount = isColliding
+      ? 0
+      : getTongueAmount(timestamp);
+
+    const eatAmount = isColliding
+      ? 0
+      : getEatAmount(timestamp);
+
+    // Direction of travel becomes the local X axis.
+    const angle = Math.atan2(facing.y, facing.x);
+
+    const headColor = blendColors(
+      bodyColor,
+      '#ffffff',
+      0.2
+    );
+
+    ctx.save();
+
+    ctx.translate(head.x, head.y);
+    ctx.rotate(angle);
+
+    // Subtle recoil and wobble on collision.
+    if (isColliding) {
+      const decay = 1 - collisionProgress;
+
+      const recoil =
+        Math.sin(collisionProgress * Math.PI) *
+        cellSize * 0.12;
+
+      const wobble =
+        Math.sin(collisionProgress * Math.PI * 8) *
+        0.1 * decay;
+
+      ctx.translate(-recoil, 0);
+      ctx.rotate(wobble);
+    }
+
+    // Brief expansion when eating.
+    const scale = 1 + eatAmount * 0.16;
+    ctx.scale(scale, scale);
+
+    let finalHeadColor = headColor;
+
+    // Flash toward white during collision.
+    if (isColliding) {
+      const flash =
+        Math.pow(1 - collisionProgress, 2) *
+        (0.5 + 0.5 *
+          Math.sin(collisionProgress * Math.PI * 12));
+
+      finalHeadColor = blendColors(
+        headColor,
+        '#ffffff',
+        clamp(flash * 0.65)
+      );
+    }
+
+    // Elongated rounded head, facing right in local space.
+    ctx.fillStyle = finalHeadColor;
+
+    ctx.beginPath();
+    ctx.ellipse(
+      cellSize * 0.035,
+      0,
+      cellSize * 0.46,
+      cellSize * 0.41,
+      0,
+      0,
+      Math.PI * 2
+    );
+
+    ctx.fill();
+
+    // A subtle highlight over the snout.
+    ctx.fillStyle = blendColors(
+      finalHeadColor,
+      '#ffffff',
+      0.13
+    );
+
+    ctx.beginPath();
+    ctx.ellipse(
+      cellSize * 0.23,
+      -cellSize * 0.10,
+      cellSize * 0.12,
+      cellSize * 0.08,
+      -0.25,
+      0,
+      Math.PI * 2
+    );
+
+    ctx.fill();
+
+    // Draw mouth and tongue behind facial details.
+    drawMouth(cellSize, eatAmount);
+
+    if (!isColliding && eatAmount < 0.35) {
+      drawTongue(cellSize, tongueAmount);
+    }
+
+    drawEyes(
+      cellSize,
+      blinkAmount,
+      collisionProgress
+    );
+
+    ctx.restore();
+  }
+
+  // ========================================================
   // Snake Rendering
   // ========================================================
 
-  function drawSnake(alpha) {
+  function drawSnake(alpha, cellSize, bodyColor, timestamp) {
     const path = getSnakePath();
     const length = getSnakeLength();
 
     if (path.length === 0) return;
 
-    // Alpha measures progress through the current movement.
-    const progress = Math.max(0, Math.min(alpha, 1));
+    const progress = clamp(alpha);
 
-    // The head moves from its previous grid position
-    // toward its current grid position.
     const headStart = path[1] ?? path[0];
     const headEnd = path[0];
 
@@ -161,13 +665,16 @@ export function createRenderer(canvas) {
       progress
     );
 
-    // The tail follows the same route, separated
-    // from the head by the snake's body length.
-    const tailStartIndex = Math.min(length, path.length - 1);
-    const tailEndIndex = Math.min(length - 1, path.length - 1);
+    const tailStartIndex = Math.min(
+      length,
+      path.length - 1
+    );
 
-    // When eating, the tail stays in place while the head
-    // moves forward, creating smooth, continuous growth.
+    const tailEndIndex = Math.min(
+      length - 1,
+      path.length - 1
+    );
+
     const tailPosition = didGrowLastMove()
       ? path[tailEndIndex]
       : interpolate(
@@ -176,7 +683,6 @@ export function createRenderer(canvas) {
           progress
         );
 
-    // Build the visible route from tail to head.
     const route = [tailPosition];
 
     for (let i = tailEndIndex; i >= 1; i--) {
@@ -185,10 +691,10 @@ export function createRenderer(canvas) {
 
     route.push(headPosition);
 
-    // Convert all route points to canvas pixels.
-    const points = route.map(toCanvas);
+    const points = route.map(point =>
+      toCanvas(point, cellSize)
+    );
 
-    // Remove duplicate neighboring points.
     const filtered = points.filter((point, index) => {
       if (index === 0) return true;
 
@@ -200,86 +706,109 @@ export function createRenderer(canvas) {
       );
     });
 
-    // Draw the continuous body.
-    ctx.strokeStyle = BODY_COLOR;
-    ctx.lineWidth = CELL_SIZE * 0.8;
+    // Continuous rounded snake body.
+    ctx.strokeStyle = bodyColor;
+    ctx.lineWidth = cellSize * 0.8;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
 
-    drawRoundedPath(filtered);
+    drawRoundedPath(filtered, cellSize);
     ctx.stroke();
 
-    // Draw the head at the moving endpoint.
-    const head = toCanvas(headPosition);
-    const headRadius = CELL_SIZE * 0.4;
+    const head = toCanvas(headPosition, cellSize);
 
-    ctx.fillStyle = HEAD_COLOR;
-    ctx.beginPath();
-    ctx.arc(head.x, head.y, headRadius, 0, Math.PI * 2);
-    ctx.fill();
-
-    drawEyes(head.x, head.y, getSnakeDirection());
-  }
-
-  // ========================================================
-  // Eyes
-  // ========================================================
-
-  function drawEyes(headX, headY, facing) {
-    const eyeRadius = CELL_SIZE * 0.075;
-    const forwardOffset = CELL_SIZE * 0.2;
-    const sideOffset = CELL_SIZE * 0.17;
-
-    const perpendicular = {
-      x: -facing.y,
-      y: facing.x
-    };
-
-    ctx.fillStyle = '#17212b';
-
-    for (const side of [-1, 1]) {
-      const eyeX =
-        headX +
-        facing.x * forwardOffset +
-        perpendicular.x * sideOffset * side;
-
-      const eyeY =
-        headY +
-        facing.y * forwardOffset +
-        perpendicular.y * sideOffset * side;
-
-      ctx.beginPath();
-      ctx.arc(eyeX, eyeY, eyeRadius, 0, Math.PI * 2);
-      ctx.fill();
-    }
+    drawHead(
+      head,
+      getSnakeDirection(),
+      cellSize,
+      bodyColor,
+      timestamp
+    );
   }
 
   // ========================================================
   // Food Rendering
   // ========================================================
 
-  function drawFood(food) {
+  function drawFood(food, cellSize, timestamp) {
     if (food === null) return;
 
-    const centerX = food.x * CELL_SIZE + CELL_SIZE / 2;
-    const centerY = food.y * CELL_SIZE + CELL_SIZE / 2;
-    const radius = CELL_SIZE * 0.22;
+    const centerX =
+      food.x * cellSize + cellSize / 2;
+
+    const centerY =
+      food.y * cellSize + cellSize / 2;
+
+    const color = food.color ?? '#38bdf8';
+
+    const pulse = (
+      Math.sin(timestamp * 0.004) + 1
+    ) / 2;
+
+    const radius =
+      cellSize * (0.20 + pulse * 0.045);
+
+    const glowRadius =
+      cellSize * (0.4 + pulse * 0.3);
 
     ctx.save();
 
-    ctx.shadowColor = '#38bdf8';
-    ctx.shadowBlur = CELL_SIZE * 0.5;
+    const glow = ctx.createRadialGradient(
+      centerX,
+      centerY,
+      0,
+      centerX,
+      centerY,
+      glowRadius
+    );
 
-    ctx.fillStyle = '#38bdf8';
+    glow.addColorStop(0, `${color}99`);
+    glow.addColorStop(0.35, `${color}55`);
+    glow.addColorStop(1, `${color}00`);
+
+    ctx.fillStyle = glow;
     ctx.beginPath();
-    ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
+
+    ctx.arc(
+      centerX,
+      centerY,
+      glowRadius,
+      0,
+      Math.PI * 2
+    );
+
+    ctx.fill();
+
+    ctx.shadowColor = color;
+    ctx.shadowBlur =
+      cellSize * (0.5 + pulse * 0.35);
+
+    ctx.fillStyle = color;
+    ctx.beginPath();
+
+    ctx.arc(
+      centerX,
+      centerY,
+      radius,
+      0,
+      Math.PI * 2
+    );
+
     ctx.fill();
 
     ctx.shadowBlur = 0;
-    ctx.fillStyle = '#e0f2fe';
+    ctx.fillStyle = '#ffffff';
 
     ctx.beginPath();
-    ctx.arc(centerX, centerY, radius * 0.45, 0, Math.PI * 2);
+
+    ctx.arc(
+      centerX - radius * 0.25,
+      centerY - radius * 0.25,
+      radius * 0.25,
+      0,
+      Math.PI * 2
+    );
+
     ctx.fill();
 
     ctx.restore();
@@ -289,13 +818,47 @@ export function createRenderer(canvas) {
   // Main Render Function
   // ========================================================
 
-  function render(food, alpha = 1) {
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+  function render(
+    food,
+    alpha = 1,
+    score = 0,
+    timestamp = performance.now(),
+    showSnake = true
+  ) {
+    const cellSize = getCellSize();
 
-    drawGrid();
-    drawFood(food);
-    drawSnake(alpha);
+    ctx.clearRect(
+      0,
+      0,
+      canvas.width,
+      canvas.height
+    );
+
+    const bodyColor = updateSnakeColor(
+      score,
+      timestamp
+    );
+
+    drawGrid(cellSize);
+
+    if (showSnake) {
+      updateHeadAnimations(timestamp);
+
+      drawFood(food, cellSize, timestamp);
+      drawSnake(
+        alpha,
+        cellSize,
+        bodyColor,
+        timestamp
+      );
+    }
   }
 
-  return { render };
+  return {
+    render,
+    triggerEat,
+    triggerCollision,
+    resetHeadAnimations,
+    COLLISION_DURATION
+  };
 }

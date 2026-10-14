@@ -5,7 +5,11 @@ import {
   snake,
   resetSnake,
   moveSnake,
-  queueDirection
+  queueDirection,
+  getGridDimensions,
+  setGridDimensions,
+  saveSnakeState,
+  restoreSnakeState
 } from './snake.js';
 
 import { createRenderer } from './renderer.js';
@@ -14,75 +18,258 @@ import { createRenderer } from './renderer.js';
 // Game Setup
 // ==========================================================
 
-export function createGame(canvas, scoreDisplay, statusDisplay) {
+export function createGame(
+  canvas,
+  scoreDisplay,
+  statusDisplay,
+  highScoreDisplay = null
+) {
   const renderer = createRenderer(canvas);
 
-  // ==========================================================
-  // Device-Aware Instructions
-  // ==========================================================
+  // ========================================================
+  // Configuration
+  // ========================================================
+
+  const BOARD_CONFIGS = {
+    desktop: { cols: GRID_SIZE, rows: GRID_SIZE },
+    portrait: { cols: 10, rows: 16 },
+    landscape: { cols: 18, rows: 10 }
+  };
+
+  const FOOD_COLORS = [
+    '#38bdf8',
+    '#f472b6',
+    '#fbbf24',
+    '#a78bfa',
+    '#4ade80',
+    '#fb7185',
+    '#22d3ee'
+  ];
+
+  const HIGH_SCORE_KEY = 'snake-high-score';
+  const LOGICAL_CELL_SIZE = 40;
+
+  // ========================================================
+  // Game State
+  // ========================================================
+
+  let food = null;
+  let score = 0;
+  let highScore = loadHighScore();
+
+  // ready, running, paused, dying, gameover
+  let gameState = 'ready';
+  let gameStarted = false;
+  let gameWon = false;
+
+  let lastFrameTime = null;
+  let elapsedTime = 0;
+  let animationStarted = false;
+
+  // Time at which the collision reaction began.
+  let collisionStartTime = null;
+
+  // The orientation associated with the active game.
+  let activeLayout = null;
+
+  // The orientation currently displayed on screen.
+  let displayedLayout = null;
+
+  // Original game preserved during a rotation.
+  let suspendedGame = null;
+
+  let awaitingOrientationChoice = false;
+  let orientationFrame = null;
+
+  // ========================================================
+  // Device and Layout Detection
+  // ========================================================
 
   function isTouchDevice() {
     return window.matchMedia('(pointer: coarse)').matches;
   }
 
-  function getStartMessage() {
-    return isTouchDevice()
-      ? 'Tap to Start\nSwipe to Move'
-      : '';
-  }
-
-  function getPauseMessage() {
-    return isTouchDevice()
-      ? 'Paused\nTap to Resume'
-      : `
-        <div class="start-instructions">
-          <div>Paused</div>
-          <div class="instruction-row">
-            <span class="key space-key">SPACE</span>
-            <span>to Resume</span>
-          </div>
-        </div>
-      `;
-  }
-
-  function getEndMessage(won) {
-    const result = won ? 'You Win!' : 'Game Over!';
-
-    if (isTouchDevice()) {
-      return `${result}\nScore: ${score}\nTap to Restart`;
+  function getLayout() {
+    if (!isTouchDevice()) {
+      return 'desktop';
     }
 
+    return window.innerWidth > window.innerHeight
+      ? 'landscape'
+      : 'portrait';
+  }
+
+  // ========================================================
+  // High Score
+  // ========================================================
+
+  function loadHighScore() {
+    try {
+      const stored = Number(
+        localStorage.getItem(HIGH_SCORE_KEY)
+      );
+
+      return Number.isFinite(stored) && stored > 0
+        ? Math.floor(stored)
+        : 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  function saveHighScore() {
+    try {
+      localStorage.setItem(
+        HIGH_SCORE_KEY,
+        String(highScore)
+      );
+    } catch {
+      // The game remains playable without storage.
+    }
+  }
+
+  function updateScoreDisplay() {
+    scoreDisplay.textContent = score;
+
+    if (highScoreDisplay) {
+      highScoreDisplay.textContent = highScore;
+    }
+  }
+
+  // ========================================================
+  // Status Overlay Helpers
+  // ========================================================
+
+  function spaceKeyInstruction(action) {
     return `
-      <div class="start-instructions">
-        <div>${result}</div>
-        <div>Score: ${score}</div>
-        <div class="instruction-row">
-          <span class="key space-key">SPACE</span>
-          <span>to Restart</span>
-        </div>
+      <div class="instruction-row">
+        <span class="key space-key">SPACE</span>
+        <span>to ${action}</span>
       </div>
     `;
   }
 
-  let food = null;
-  let score = 0;
-  let gameState = 'ready';
+  function showStatus(content, useHTML = false) {
+    if (useHTML) {
+      statusDisplay.innerHTML = content;
+    } else {
+      statusDisplay.textContent = content;
+    }
 
-  let lastFrameTime = null;
-  let elapsedTime = 0;
+    statusDisplay.classList.remove('hidden');
+  }
 
-  // Tracks whether the animation loop has started.
-  let animationStarted = false;
+  function hideStatus() {
+    statusDisplay.classList.add('hidden');
+  }
+
+  function showStartMessage() {
+    if (isTouchDevice()) {
+      showStatus('Tap to Start\nSwipe to Move');
+      return;
+    }
+
+    showStatus(`
+      <div class="start-instructions">
+        ${spaceKeyInstruction('Start')}
+
+        <div class="instruction-row">
+          <div class="arrow-keys">
+            <span class="key arrow-up">↑</span>
+            <span class="key arrow-left">←</span>
+            <span class="key arrow-down">↓</span>
+            <span class="key arrow-right">→</span>
+          </div>
+          <span>to Move</span>
+        </div>
+      </div>
+    `, true);
+  }
+
+  function showPauseMessage() {
+    if (isTouchDevice()) {
+      showStatus('Paused\nTap to Resume');
+      return;
+    }
+
+    showStatus(`
+      <div class="start-instructions">
+        <div>Paused</div>
+        ${spaceKeyInstruction('Resume')}
+      </div>
+    `, true);
+  }
+
+  function showEndMessage(won) {
+    const result = won ? 'You Win!' : 'Game Over!';
+
+    if (isTouchDevice()) {
+      showStatus(
+        `${result}\nScore: ${score}\nTap to Restart`
+      );
+      return;
+    }
+
+    showStatus(`
+      <div class="start-instructions">
+        <div>${result}</div>
+        <div>Score: ${score}</div>
+        ${spaceKeyInstruction('Restart')}
+      </div>
+    `, true);
+  }
+
+  function showOrientationMessage() {
+    const layoutName =
+      displayedLayout === 'landscape'
+        ? 'Landscape'
+        : displayedLayout === 'portrait'
+          ? 'Portrait'
+          : 'Desktop';
+
+    const instruction = isTouchDevice()
+      ? 'Tap to Start New Game'
+      : 'Press Space to Start New Game';
+
+    showStatus(
+      `Orientation Changed\n${layoutName} Mode\n${instruction}\nRotate Back to Resume Previous Game`
+    );
+  }
+
+  // ========================================================
+  // Canvas and Board Dimensions
+  // ========================================================
+
+  function resizeCanvas(cols, rows) {
+    canvas.width = cols * LOGICAL_CELL_SIZE;
+    canvas.height = rows * LOGICAL_CELL_SIZE;
+
+    const boardContainer = canvas.parentElement;
+
+    if (boardContainer) {
+      boardContainer.style.aspectRatio = `${cols} / ${rows}`;
+    }
+  }
+
+  function configureBoard(layout) {
+    const config = BOARD_CONFIGS[layout];
+
+    setGridDimensions(config.cols, config.rows);
+    resizeCanvas(config.cols, config.rows);
+
+    displayedLayout = layout;
+  }
 
   // ========================================================
   // Food Spawning
   // ========================================================
 
   function spawnFood() {
+    const { cols, rows } = getGridDimensions();
     const emptyCells = [];
 
-    for (let y = 0; y < GRID_SIZE; y++) {
-      for (let x = 0; x < GRID_SIZE; x++) {
+    for (let y = 0; y < rows; y++) {
+      for (let x = 0; x < cols; x++) {
         const occupied = snake.some(segment =>
           segment.x === x && segment.y === y
         );
@@ -102,7 +289,149 @@ export function createGame(canvas, scoreDisplay, statusDisplay) {
       Math.random() * emptyCells.length
     );
 
-    food = emptyCells[randomIndex];
+    const colorIndex = Math.floor(
+      Math.random() * FOOD_COLORS.length
+    );
+
+    food = {
+      ...emptyCells[randomIndex],
+      color: FOOD_COLORS[colorIndex]
+    };
+  }
+
+  // ========================================================
+  // Game State Preservation
+  // ========================================================
+
+  function saveGameState() {
+    return {
+      snakeState: saveSnakeState(),
+      food: food ? { ...food } : null,
+      score,
+      gameState,
+      gameStarted,
+      gameWon,
+      activeLayout,
+      elapsedTime
+    };
+  }
+
+  function restoreGameState(saved) {
+    restoreSnakeState(saved.snakeState);
+
+    food = saved.food ? { ...saved.food } : null;
+    score = saved.score;
+    gameStarted = saved.gameStarted;
+    gameWon = saved.gameWon;
+
+    activeLayout = saved.activeLayout;
+    displayedLayout = saved.activeLayout;
+
+    // Never resume movement automatically.
+    // A collision in progress resolves to Game Over.
+    if (saved.gameState === 'running') {
+      gameState = 'paused';
+    } else if (saved.gameState === 'dying') {
+      gameState = 'gameover';
+      gameWon = false;
+    } else {
+      gameState = saved.gameState;
+    }
+
+    elapsedTime = 0;
+    lastFrameTime = null;
+    collisionStartTime = null;
+
+    const { cols, rows } = getGridDimensions();
+    resizeCanvas(cols, rows);
+
+    // Don't carry unfinished visual reactions
+    // across an orientation change.
+    renderer.resetHeadAnimations();
+
+    updateScoreDisplay();
+
+    awaitingOrientationChoice = false;
+    suspendedGame = null;
+
+    if (gameState === 'paused') {
+      showPauseMessage();
+    } else if (gameState === 'gameover') {
+      showEndMessage(gameWon);
+    } else {
+      showStartMessage();
+    }
+  }
+
+  // ========================================================
+  // Orientation Handling
+  // ========================================================
+
+  function handleOrientationChange() {
+    const newLayout = getLayout();
+
+    if (newLayout === displayedLayout) {
+      return;
+    }
+
+    // Return to the original game.
+    if (
+      suspendedGame &&
+      newLayout === suspendedGame.activeLayout
+    ) {
+      restoreGameState(suspendedGame);
+      return;
+    }
+
+    // Before gameplay starts, simply switch boards.
+    if (!gameStarted && !suspendedGame) {
+      activeLayout = newLayout;
+
+      configureBoard(newLayout);
+      resetGame();
+      showStartMessage();
+
+      return;
+    }
+
+    // Preserve the original game once.
+    if (!suspendedGame) {
+      suspendedGame = saveGameState();
+    }
+
+    // Freeze gameplay and display the new board.
+    gameState = 'paused';
+    awaitingOrientationChoice = true;
+
+    configureBoard(newLayout);
+
+    elapsedTime = 0;
+    lastFrameTime = null;
+    collisionStartTime = null;
+
+    showOrientationMessage();
+  }
+
+  function scheduleOrientationCheck() {
+    if (orientationFrame !== null) {
+      cancelAnimationFrame(orientationFrame);
+    }
+
+    orientationFrame = requestAnimationFrame(() => {
+      orientationFrame = null;
+      handleOrientationChange();
+    });
+  }
+
+  function startNewGameInCurrentOrientation() {
+    suspendedGame = null;
+    awaitingOrientationChoice = false;
+
+    activeLayout = displayedLayout;
+
+    configureBoard(activeLayout);
+    resetGame();
+    startGame();
   }
 
   // ========================================================
@@ -110,16 +439,27 @@ export function createGame(canvas, scoreDisplay, statusDisplay) {
   // ========================================================
 
   function startGame() {
-    if (gameState === 'running') return;
+    if (awaitingOrientationChoice) {
+      startNewGameInCurrentOrientation();
+      return;
+    }
+
+    if (
+      gameState === 'running' ||
+      gameState === 'dying'
+    ) {
+      return;
+    }
 
     if (gameState === 'gameover') {
       resetGame();
     }
 
     gameState = 'running';
-    statusDisplay.classList.add('hidden');
+    gameStarted = true;
 
-    // Don't count time spent paused or waiting to start.
+    hideStatus();
+
     lastFrameTime = null;
     elapsedTime = 0;
   }
@@ -128,36 +468,75 @@ export function createGame(canvas, scoreDisplay, statusDisplay) {
     if (gameState !== 'running') return;
 
     gameState = 'paused';
-
-    if (isTouchDevice()) {
-      statusDisplay.textContent = getPauseMessage();
-    } else {
-      statusDisplay.innerHTML = getPauseMessage();
-    }
-    statusDisplay.classList.remove('hidden');
+    showPauseMessage();
   }
 
   function endGame(won = false) {
     gameState = 'gameover';
+    gameWon = won;
 
     elapsedTime = 0;
+    collisionStartTime = null;
 
-    if (isTouchDevice()) {
-      statusDisplay.textContent = getEndMessage(won);
-    } else {
-      statusDisplay.innerHTML = getEndMessage(won);
-    }
-    statusDisplay.classList.remove('hidden');
+    showEndMessage(won);
   }
+
+  // ========================================================
+  // Collision Animation
+  // ========================================================
+
+  function beginCollision(timestamp) {
+    // Movement stops immediately.
+    gameState = 'dying';
+    gameWon = false;
+
+    elapsedTime = 0;
+    collisionStartTime = timestamp;
+
+    // Trigger the renderer's recoil, flash,
+    // and X-shaped eyes.
+    renderer.triggerCollision(timestamp);
+
+    // Leave the board unobstructed until the
+    // collision animation has finished.
+    hideStatus();
+  }
+
+  function updateCollisionAnimation(timestamp) {
+    if (
+      gameState !== 'dying' ||
+      collisionStartTime === null
+    ) {
+      return;
+    }
+
+    const elapsed = timestamp - collisionStartTime;
+
+    if (elapsed >= renderer.COLLISION_DURATION) {
+      endGame(false);
+    }
+  }
+
+  // ========================================================
+  // Reset and Input
+  // ========================================================
 
   function resetGame() {
     resetSnake();
 
     score = 0;
-    scoreDisplay.textContent = score;
+    gameStarted = false;
+    gameWon = false;
+
+    updateScoreDisplay();
 
     elapsedTime = 0;
     lastFrameTime = null;
+    collisionStartTime = null;
+
+    // Remove old blinking, eating, or collision
+    // animations before beginning a new game.
+    renderer.resetHeadAnimations();
 
     spawnFood();
 
@@ -165,6 +544,17 @@ export function createGame(canvas, scoreDisplay, statusDisplay) {
   }
 
   function toggleGame() {
+    if (awaitingOrientationChoice) {
+      startNewGameInCurrentOrientation();
+      return;
+    }
+
+    // Ignore taps and Space while the collision
+    // reaction is playing.
+    if (gameState === 'dying') {
+      return;
+    }
+
     if (gameState === 'running') {
       pauseGame();
     } else {
@@ -172,11 +562,14 @@ export function createGame(canvas, scoreDisplay, statusDisplay) {
     }
   }
 
-  // ========================================================
-  // Direction Controls
-  // ========================================================
-
   function changeDirection(newDirection) {
+    if (
+      awaitingOrientationChoice ||
+      gameState === 'dying'
+    ) {
+      return;
+    }
+
     if (gameState === 'gameover') {
       resetGame();
     }
@@ -194,17 +587,26 @@ export function createGame(canvas, scoreDisplay, statusDisplay) {
   // Logical Game Updates
   // ========================================================
 
-  function updateGame() {
+  function updateGame(timestamp) {
     const result = moveSnake(food);
 
     if (result.collision) {
-      endGame();
+      beginCollision(timestamp);
       return;
     }
 
     if (result.ateFood) {
       score++;
-      scoreDisplay.textContent = score;
+
+      // Tell the renderer to animate the bite.
+      renderer.triggerEat(timestamp - 100);
+
+      if (score > highScore) {
+        highScore = score;
+        saveHighScore();
+      }
+
+      updateScoreDisplay();
 
       if (result.won) {
         food = null;
@@ -236,18 +638,48 @@ export function createGame(canvas, scoreDisplay, statusDisplay) {
 
       if (elapsedTime >= TICK_RATE) {
         elapsedTime -= TICK_RATE;
-        updateGame();
+        updateGame(timestamp);
       }
     }
 
-    // Alpha represents movement progress between ticks.
+    // Collision animation uses real elapsed time,
+    // independent of the snake's movement tick.
+    updateCollisionAnimation(timestamp);
+
     let alpha = 1;
 
     if (gameState === 'running') {
-      alpha = Math.min(elapsedTime / TICK_RATE, 1);
+      alpha = Math.min(
+        elapsedTime / TICK_RATE,
+        1
+      );
     }
 
-    renderer.render(food, alpha);
+    // The collision reaction should display the
+    // last valid snake position, not interpolate
+    // into the wall or its own body.
+    if (gameState === 'dying') {
+      alpha = 0;
+    }
+
+    // Show only the empty board when the player
+    // rotates away from the original game.
+    if (awaitingOrientationChoice) {
+      renderer.render(
+        null,
+        1,
+        score,
+        timestamp,
+        false
+      );
+    } else {
+      renderer.render(
+        food,
+        alpha,
+        score,
+        timestamp
+      );
+    }
 
     requestAnimationFrame(animationLoop);
   }
@@ -257,32 +689,21 @@ export function createGame(canvas, scoreDisplay, statusDisplay) {
   // ========================================================
 
   function initialize() {
+    activeLayout = getLayout();
+
+    configureBoard(activeLayout);
     resetGame();
+    showStartMessage();
 
-    if (isTouchDevice()) {
-      statusDisplay.textContent = getStartMessage();
-    } else {
-      statusDisplay.innerHTML = `
-        <div class="start-instructions">
-          <div class="instruction-row">
-            <span class="key space-key">SPACE</span>
-            <span>to Start</span>
-          </div>
+    window.addEventListener(
+      'resize',
+      scheduleOrientationCheck
+    );
 
-          <div class="instruction-row">
-            <div class="arrow-keys">
-              <span class="key arrow-up">↑</span>
-              <span class="key arrow-left">←</span>
-              <span class="key arrow-down">↓</span>
-              <span class="key arrow-right">→</span>
-            </div>
-            <span>to Move</span>
-          </div>
-        </div>
-      `;
-    }
-
-    statusDisplay.classList.remove('hidden');
+    window.addEventListener(
+      'orientationchange',
+      scheduleOrientationCheck
+    );
 
     if (!animationStarted) {
       animationStarted = true;

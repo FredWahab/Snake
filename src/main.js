@@ -10,14 +10,25 @@ import { setupInput } from './input.js';
 
 document.querySelector('#app').innerHTML = `
   <main class="game">
+
+    <!-- Header and Scoreboard -->
     <header class="game-header">
       <h1>Snake</h1>
 
-      <div class="score">
-        Score: <span id="score">0</span>
+      <div class="scoreboard">
+        <div class="score">
+          Score:
+          <span id="score">0</span>
+        </div>
+
+        <div class="high-score">
+          Best:
+          <span id="high-score">0</span>
+        </div>
       </div>
     </header>
 
+    <!-- Game Board -->
     <div class="board-container">
       <canvas
         id="game-board"
@@ -25,9 +36,13 @@ document.querySelector('#app').innerHTML = `
         height="600">
       </canvas>
 
-      <div id="game-status" class="game-status"></div>
+      <div
+        id="game-status"
+        class="game-status">
+      </div>
     </div>
 
+    <!-- Portfolio Attribution -->
     <footer class="game-footer">
       Made by
       <a
@@ -37,6 +52,7 @@ document.querySelector('#app').innerHTML = `
         fredwahab.com
       </a>
     </footer>
+
   </main>
 `;
 
@@ -45,7 +61,11 @@ document.querySelector('#app').innerHTML = `
 // ==========================================================
 
 const canvas = document.querySelector('#game-board');
+
 const scoreDisplay = document.querySelector('#score');
+
+const highScoreDisplay = document.querySelector('#high-score');
+
 const statusDisplay = document.querySelector('#game-status');
 
 // ==========================================================
@@ -56,7 +76,8 @@ const statusDisplay = document.querySelector('#game-status');
 const game = createGame(
   canvas,
   scoreDisplay,
-  statusDisplay
+  statusDisplay,
+  highScoreDisplay
 );
 
 // Connect keyboard and touchscreen controls.

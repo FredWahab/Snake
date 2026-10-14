@@ -1,185 +1,281 @@
 
- // ==========================================================
- // Snake State and Movement
- // ==========================================================
+/* ==========================================================
+   Snake State and Movement
+   ========================================================== */
 
- export const GRID_SIZE = 15;
- export const TICK_RATE = 200;
+// Default desktop grid dimensions.
+export const GRID_SIZE = 15;
+export const TICK_RATE = 200;
 
- const STARTING_SNAKE = [
-   { x: 10, y: 10 },
-   { x: 9, y: 10 },
-   { x: 8, y: 10 }
- ];
+// Active grid dimensions.
+// These can change for mobile portrait and landscape.
+export let GRID_COLS = GRID_SIZE;
+export let GRID_ROWS = GRID_SIZE;
 
- export const snake = [];
+export const snake = [];
 
- export let direction = { x: 1, y: 0 };
+export let direction = { x: 1, y: 0 };
 
- let pendingDirection = null;
+let pendingDirection = null;
 
-  // Whether the most recent movement caused the snake to grow.
-  let grewLastMove = false;
+// Whether the most recent movement caused growth.
+let grewLastMove = false;
 
-  export function didGrowLastMove() {
-    return grewLastMove;
+// History of grid positions traveled by the head.
+// Newest position is always at index 0.
+//
+// Unlike the logical snake array, this history retains
+// previous positions so the renderer can reconstruct
+// the exact route around corners.
+const pathHistory = [];
+
+/* ==========================================================
+   Utility Functions
+   ========================================================== */
+
+function copyPoint(point) {
+  return { x: point.x, y: point.y };
+}
+
+function copyPoints(points) {
+  return points.map(copyPoint);
+}
+
+/* ==========================================================
+   Grid Configuration
+   ========================================================== */
+
+// Change the logical board dimensions.
+// This does not reset the snake automatically.
+export function setGridDimensions(cols, rows) {
+  if (
+    !Number.isInteger(cols) ||
+    !Number.isInteger(rows) ||
+    cols < 3 ||
+    rows < 3
+  ) {
+    throw new Error('Invalid Snake grid dimensions.');
   }
 
- // History of grid positions traveled by the head.
- // Newest position is always at index 0.
- //
- // Unlike the logical snake array, this history retains
- // previous positions so the renderer can reconstruct
- // the exact route around corners.
- const pathHistory = [];
+  GRID_COLS = cols;
+  GRID_ROWS = rows;
+}
 
- function copyPoint(point) {
-   return { x: point.x, y: point.y };
- }
+export function getGridDimensions() {
+  return {
+    cols: GRID_COLS,
+    rows: GRID_ROWS
+  };
+}
 
- export function resetSnake() {
-   snake.length = 0;
-   grewLastMove = false;
+/* ==========================================================
+   Snake Initialization
+   ========================================================== */
 
-   for (const segment of STARTING_SNAKE) {
-     snake.push(copyPoint(segment));
-   }
+export function resetSnake() {
+  snake.length = 0;
+  grewLastMove = false;
 
-   direction = { x: 1, y: 0 };
-   pendingDirection = null;
+  // Center the snake within the current board.
+  const centerX = Math.floor(GRID_COLS / 2);
+  const centerY = Math.floor(GRID_ROWS / 2);
 
-   pathHistory.length = 0;
+  const startingSnake = [
+    { x: centerX, y: centerY },
+    { x: centerX - 1, y: centerY },
+    { x: centerX - 2, y: centerY }
+  ];
 
-   for (const segment of STARTING_SNAKE) {
-     pathHistory.push(copyPoint(segment));
-   }
- }
+  for (const segment of startingSnake) {
+    snake.push(copyPoint(segment));
+  }
 
- // ==========================================================
- // Direction Controls
- // ==========================================================
+  direction = { x: 1, y: 0 };
+  pendingDirection = null;
 
- export function queueDirection(newDirection) {
-   // Prevent multiple turns during a single game tick.
-   if (pendingDirection !== null) return false;
+  pathHistory.length = 0;
 
-   // Prevent reversing directly into the body.
-   if (
-     newDirection.x === -direction.x &&
-     newDirection.y === -direction.y
-   ) {
-     return false;
-   }
+  for (const segment of startingSnake) {
+    pathHistory.push(copyPoint(segment));
+  }
+}
 
-   // No need to queue the direction we're already moving.
-   if (
-     newDirection.x === direction.x &&
-     newDirection.y === direction.y
-   ) {
-     return true;
-   }
+/* ==========================================================
+   Game State Preservation
+   ========================================================== */
 
-   pendingDirection = copyPoint(newDirection);
-   return true;
- }
+// Capture everything needed to restore the snake after
+// an orientation change.
+export function saveSnakeState() {
+  return {
+    gridCols: GRID_COLS,
+    gridRows: GRID_ROWS,
+    segments: copyPoints(snake),
+    direction: copyPoint(direction),
+    pendingDirection: pendingDirection
+      ? copyPoint(pendingDirection)
+      : null,
+    grewLastMove,
+    pathHistory: copyPoints(pathHistory)
+  };
+}
 
- // ==========================================================
- // Collision Detection
- // ==========================================================
+// Restore a previously saved snake without resetting
+// its position, direction, or movement history.
+export function restoreSnakeState(state) {
+  if (!state) {
+    throw new Error('Cannot restore an empty Snake state.');
+  }
 
- function checkCollision(newHead, ateFood) {
-   // Wall collision.
-   if (
-     newHead.x < 0 ||
-     newHead.x >= GRID_SIZE ||
-     newHead.y < 0 ||
-     newHead.y >= GRID_SIZE
-   ) {
-     return true;
-   }
+  setGridDimensions(state.gridCols, state.gridRows);
 
-   // The tail moves away unless we're eating.
-   const body = ateFood ? snake : snake.slice(0, -1);
+  snake.length = 0;
+  snake.push(...copyPoints(state.segments));
 
-   return body.some(segment =>
-     segment.x === newHead.x &&
-     segment.y === newHead.y
-   );
- }
+  direction = copyPoint(state.direction);
 
- // ==========================================================
- // Snake Movement
- // ==========================================================
+  pendingDirection = state.pendingDirection
+    ? copyPoint(state.pendingDirection)
+    : null;
 
- export function moveSnake(food) {
-   if (pendingDirection !== null) {
-     direction = pendingDirection;
-     pendingDirection = null;
-   }
+  grewLastMove = state.grewLastMove;
 
-   const head = snake[0];
+  pathHistory.length = 0;
+  pathHistory.push(...copyPoints(state.pathHistory));
+}
 
-   const newHead = {
-     x: head.x + direction.x,
-     y: head.y + direction.y
-   };
+/* ==========================================================
+   Direction Controls
+   ========================================================== */
 
-   const ateFood =
-     food !== null &&
-     newHead.x === food.x &&
-     newHead.y === food.y;
+export function queueDirection(newDirection) {
+  // Prevent multiple turns during a single game tick.
+  if (pendingDirection !== null) return false;
 
-   // Check collision before modifying the snake.
-   if (checkCollision(newHead, ateFood)) {
-     return {
-       collision: true,
-       ateFood: false,
-       won: false
-     };
-   }
+  // Prevent reversing directly into the body.
+  if (
+    newDirection.x === -direction.x &&
+    newDirection.y === -direction.y
+  ) {
+    return false;
+  }
 
-    // Record whether this movement caused growth.
-    grewLastMove = ateFood;
+  // No need to queue the direction we're already moving.
+  if (
+    newDirection.x === direction.x &&
+    newDirection.y === direction.y
+  ) {
+    return true;
+  }
 
-    // Record the exact grid route followed by the head.
-    pathHistory.unshift(copyPoint(newHead));
+  pendingDirection = copyPoint(newDirection);
+  return true;
+}
 
-    snake.unshift(newHead);
+/* ==========================================================
+   Collision Detection
+   ========================================================== */
 
-    if (!ateFood) {
-      snake.pop();
-    }
+function checkCollision(newHead, ateFood) {
+  // Wall collision.
+  if (
+    newHead.x < 0 ||
+    newHead.x >= GRID_COLS ||
+    newHead.y < 0 ||
+    newHead.y >= GRID_ROWS
+  ) {
+    return true;
+  }
 
-   // Keep enough history for the entire body, plus
-   // one additional point for smooth tail movement.
-   const maxHistory = snake.length + 2;
+  // The tail moves away unless we're eating.
+  const body = ateFood ? snake : snake.slice(0, -1);
 
-   if (pathHistory.length > maxHistory) {
-     pathHistory.length = maxHistory;
-   }
+  return body.some(segment =>
+    segment.x === newHead.x &&
+    segment.y === newHead.y
+  );
+}
 
-   return {
-     collision: false,
-     ateFood,
-     won: snake.length === GRID_SIZE * GRID_SIZE
-   };
- }
+/* ==========================================================
+   Snake Movement
+   ========================================================== */
 
- // ==========================================================
- // Rendering Data
- // ==========================================================
+export function moveSnake(food) {
+  if (pendingDirection !== null) {
+    direction = pendingDirection;
+    pendingDirection = null;
+  }
 
- export function getSnakePath() {
-   return pathHistory;
- }
+  const head = snake[0];
 
- export function getSnakeLength() {
-   return snake.length;
- }
+  const newHead = {
+    x: head.x + direction.x,
+    y: head.y + direction.y
+  };
 
- export function getSnakeDirection() {
-   return direction;
- }
+  const ateFood =
+    food !== null &&
+    newHead.x === food.x &&
+    newHead.y === food.y;
 
- // Initialize the starting snake.
- resetSnake();
+  // Check collision before modifying the snake.
+  if (checkCollision(newHead, ateFood)) {
+    return {
+      collision: true,
+      ateFood: false,
+      won: false
+    };
+  }
+
+  // Record whether this movement caused growth.
+  grewLastMove = ateFood;
+
+  // Record the exact grid route followed by the head.
+  pathHistory.unshift(copyPoint(newHead));
+
+  snake.unshift(newHead);
+
+  if (!ateFood) {
+    snake.pop();
+  }
+
+  // Keep enough history for the entire body, plus
+  // additional points for smooth tail movement.
+  const maxHistory = snake.length + 2;
+
+  if (pathHistory.length > maxHistory) {
+    pathHistory.length = maxHistory;
+  }
+
+  return {
+    collision: false,
+    ateFood,
+    won: snake.length === GRID_COLS * GRID_ROWS
+  };
+}
+
+/* ==========================================================
+   Rendering Data
+   ========================================================== */
+
+export function getSnakePath() {
+  return pathHistory;
+}
+
+export function getSnakeLength() {
+  return snake.length;
+}
+
+export function getSnakeDirection() {
+  return direction;
+}
+
+export function didGrowLastMove() {
+  return grewLastMove;
+}
+
+/* ==========================================================
+   Initial Setup
+   ========================================================== */
+
+resetSnake();
