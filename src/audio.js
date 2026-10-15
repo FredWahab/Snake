@@ -2,14 +2,12 @@
 /* ==========================================================
    Snake - Audio Manager
 
-   Based on the working Minesweeper audio implementation.
-
    Responsible for:
-   - Loading and decoding sound effects with Web Audio
-   - Playing gameplay sound effects
+   - Loading sound effects using HTML5 Audio
+   - Playing overlapping sound effects
+   - Supporting iPhone Safari and desktop browsers
    - Managing mute state and saved preferences
-   - Supporting overlapping sounds
-   - Handling mobile browser audio restrictions
+   - Prioritizing important gameplay sounds
 
    Audio files are stored in public/audio/.
    ========================================================== */
@@ -83,98 +81,20 @@ export function createAudioManager() {
   }
 
   // --------------------------------------------------------
-  // Audio Context
-  // --------------------------------------------------------
-
-  const AudioContextClass =
-    window.AudioContext || window.webkitAudioContext;
-
-  let context = null;
-
-  function getContext() {
-    if (!AudioContextClass) {
-      return null;
-    }
-
-    if (!context) {
-      context = new AudioContextClass();
-    }
-
-    return context;
-  }
-
-  // --------------------------------------------------------
   // Sound Loading
   // --------------------------------------------------------
 
-  const buffers = new Map();
-  const loading = new Map();
+  const sounds = new Map();
 
-  async function loadSound(name) {
-    if (buffers.has(name)) {
-      return buffers.get(name);
-    }
+  for (const [name, filename] of Object.entries(SOUND_FILES)) {
+    const audio = new Audio(
+      `${AUDIO_PATH}${filename}.mp3`
+    );
 
-    if (loading.has(name)) {
-      return loading.get(name);
-    }
+    audio.preload = 'auto';
+    audio.volume = SOUND_VOLUMES[name] ?? 0.5;
 
-    const filename = SOUND_FILES[name];
-    const ctx = getContext();
-
-    if (!filename || !ctx) {
-      return null;
-    }
-
-    const promise = (async () => {
-      const response = await fetch(
-        `${AUDIO_PATH}${filename}.mp3`
-      );
-
-      if (!response.ok) {
-        throw new Error(
-          `Failed to load ${filename}.mp3: ${response.status}`
-        );
-      }
-
-      const data = await response.arrayBuffer();
-      const buffer = await ctx.decodeAudioData(data);
-
-      buffers.set(name, buffer);
-
-      return buffer;
-    })();
-
-    loading.set(name, promise);
-
-    try {
-      return await promise;
-    } finally {
-      loading.delete(name);
-    }
-  }
-
-  // --------------------------------------------------------
-  // Sound Preloading
-  // --------------------------------------------------------
-
-  let preloadStarted = false;
-
-  function preloadSounds() {
-    if (preloadStarted || muted) {
-      return;
-    }
-
-    preloadStarted = true;
-
-    for (const name of Object.keys(SOUND_FILES)) {
-      loadSound(name).catch(error => {
-        console.warn(
-          `Could not preload ${name}:`,
-          error
-        );
-      });
-    }
+    sounds.set(name, audio);
   }
 
   // --------------------------------------------------------
@@ -182,17 +102,11 @@ export function createAudioManager() {
   // --------------------------------------------------------
 
   const activeSounds = new Set();
-  let playbackGeneration = 0;
 
   function stopAll() {
-    playbackGeneration++;
-
-    for (const source of activeSounds) {
-      try {
-        source.stop();
-      } catch {
-        // Sound may have already finished.
-      }
+    for (const audio of activeSounds) {
+      audio.pause();
+      audio.currentTime = 0;
     }
 
     activeSounds.clear();
@@ -203,54 +117,26 @@ export function createAudioManager() {
   // --------------------------------------------------------
 
   function unlockAudio() {
-    if (muted) {
-      return;
-    }
+    if (muted) return;
 
-    const ctx = getContext();
-
-    if (!ctx) {
-      return;
-    }
-
-    if (ctx.state === 'suspended') {
-      ctx.resume().catch(() => {
-        // A later interaction can retry.
-      });
-    }
-
-    preloadSounds();
+    // HTML5 Audio does not require an AudioContext.
+    // Actual playback is initiated by the game after
+    // the user's first interaction.
+    //
+    // Keep this method for compatibility with input.js.
   }
-
-  document.addEventListener(
-    'pointerdown',
-    unlockAudio
-  );
-
-  document.addEventListener(
-    'touchstart',
-    unlockAudio,
-    { passive: true }
-  );
-
-  document.addEventListener(
-    'keydown',
-    unlockAudio
-  );
 
   // --------------------------------------------------------
   // Sound Playback
   // --------------------------------------------------------
 
-  async function play(name) {
-    if (muted) {
-      return;
-    }
+  function play(name) {
+    if (muted) return;
 
-    if (!SOUND_FILES[name]) {
-      console.warn(
-        `Unknown Snake sound: ${name}`
-      );
+    const original = sounds.get(name);
+
+    if (!original) {
+      console.warn(`Unknown Snake sound: ${name}`);
       return;
     }
 
@@ -264,67 +150,42 @@ export function createAudioManager() {
       return;
     }
 
-    const generation = playbackGeneration;
+    // Clone the audio element to allow overlapping
+    // instances of the same sound.
+    const audio = original.cloneNode(true);
 
-    try {
-      const ctx = getContext();
+    audio.volume = SOUND_VOLUMES[name] ?? 0.5;
 
-      if (!ctx) {
-        return;
-      }
+    // Resume uses the pause sound at a lower pitch.
+    audio.playbackRate = name === 'resume' ? 0.85 : 1;
 
-      if (ctx.state === 'suspended') {
-        await ctx.resume();
-      }
+    // Track active sounds for mute and cleanup.
+    activeSounds.add(audio);
 
-      const buffer = await loadSound(name);
+    const cleanup = () => {
+      activeSounds.delete(audio);
+      audio.removeEventListener('ended', cleanup);
+      audio.removeEventListener('error', cleanup);
+    };
 
-      if (
-        muted ||
-        generation !== playbackGeneration ||
-        !buffer ||
-        ctx.state !== 'running'
-      ) {
-        return;
-      }
+    audio.addEventListener('ended', cleanup);
+    audio.addEventListener('error', cleanup);
 
-      if (
-        !isPriority &&
-        activeSounds.size >= MAX_SIMULTANEOUS_SOUNDS
-      ) {
-        return;
-      }
+    const playPromise = audio.play();
 
-      const source = ctx.createBufferSource();
-      const gain = ctx.createGain();
+    if (playPromise && typeof playPromise.catch === 'function') {
+      playPromise.catch(error => {
+        cleanup();
 
-      source.buffer = buffer;
-
-      // Resume uses the pause sound at a lower pitch.
-      source.playbackRate.value =
-        name === 'resume' ? 0.85 : 1;
-
-      gain.gain.value = SOUND_VOLUMES[name] ?? 0.5;
-
-      source.connect(gain);
-      gain.connect(ctx.destination);
-
-      source.onended = () => {
-        activeSounds.delete(source);
-
-        source.disconnect();
-        gain.disconnect();
-      };
-
-      activeSounds.add(source);
-
-      source.start(0);
-
-    } catch (error) {
-      console.warn(
-        `Audio playback failed: ${name}`,
-        error
-      );
+        // Autoplay restrictions can reject playback
+        // before the first user interaction.
+        if (error.name !== 'NotAllowedError') {
+          console.warn(
+            `Audio playback failed: ${name}`,
+            error
+          );
+        }
+      });
     }
   }
 
