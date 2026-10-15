@@ -2,15 +2,14 @@
 /* ==========================================================
    Snake - Audio Manager
 
-   HTML5 Audio implementation with reusable sound pools.
+   HTML5 Audio implementation.
 
    Features:
-   - Preloaded MP3 sound effects
-   - Reusable audio players
-   - Overlapping playback
-   - iPhone Safari compatibility
+   - MP3 sound effects
+   - Independent overlapping playback
    - Persistent mute preference
-   - Priority sounds
+   - Immediate sound cleanup
+   - Compatible with existing game and input modules
    ========================================================== */
 
 const AUDIO_PATH = `${import.meta.env.BASE_URL}audio/`;
@@ -41,14 +40,6 @@ const SOUND_VOLUMES = Object.freeze({
   highScore: 0.55
 });
 
-const MAX_SIMULTANEOUS_SOUNDS = 4;
-
-const PRIORITY_SOUNDS = new Set([
-  'collision',
-  'gameOver',
-  'highScore'
-]);
-
 // ----------------------------------------------------------
 // Audio Manager
 // ----------------------------------------------------------
@@ -76,91 +67,44 @@ export function createAudioManager() {
         String(muted)
       );
     } catch {
-      // Continue without persistent storage.
+      // Preference remains active for this session.
     }
   }
 
   // --------------------------------------------------------
-  // Audio Pools
+  // Sound Loading
   // --------------------------------------------------------
 
-  const soundPools = new Map();
-  const activeSounds = new Set();
-
-  // Two players per cue allow limited overlap.
-  // Frequently played sounds get additional players.
-  const POOL_SIZES = {
-    start: 2,
-    eat: 4,
-    pause: 2,
-    resume: 2,
-    collision: 2,
-    gameOver: 2,
-    highScore: 2
-  };
-
-  function createPlayer(filename) {
-    const player = new Audio();
-
-    player.preload = 'auto';
-    player.src = `${AUDIO_PATH}${filename}.mp3`;
-
-    // Request media loading immediately.
-    player.load();
-
-    return player;
-  }
+  const sounds = {};
 
   for (const [name, filename] of Object.entries(SOUND_FILES)) {
-    const size = POOL_SIZES[name] ?? 2;
-    const pool = [];
+    const audio = new Audio(
+      `${AUDIO_PATH}${filename}.mp3`
+    );
 
-    for (let i = 0; i < size; i++) {
-      pool.push(createPlayer(filename));
-    }
+    audio.preload = 'auto';
 
-    soundPools.set(name, pool);
+    sounds[name] = audio;
   }
 
   // --------------------------------------------------------
-  // Stop and Cleanup
+  // Active Sound Tracking
   // --------------------------------------------------------
 
-  function stopPlayer(player) {
-    player.pause();
-
-    try {
-      player.currentTime = 0;
-    } catch {
-      // Seeking may be unavailable before loading.
-    }
-
-    activeSounds.delete(player);
-  }
+  const activeSounds = new Set();
 
   function stopAll() {
-    for (const player of [...activeSounds]) {
-      stopPlayer(player);
-    }
-  }
+    for (const sound of activeSounds) {
+      sound.pause();
 
-  // --------------------------------------------------------
-  // Mobile Audio Activation
-  // --------------------------------------------------------
-
-  function unlockAudio() {
-    if (muted) return;
-
-    // Loading is requested when the manager is created.
-    // This method remains available to input.js and
-    // provides another loading opportunity after a tap.
-    for (const pool of soundPools.values()) {
-      for (const player of pool) {
-        if (player.networkState === HTMLMediaElement.NETWORK_EMPTY) {
-          player.load();
-        }
+      try {
+        sound.currentTime = 0;
+      } catch {
+        // Seeking may not be available yet.
       }
     }
+
+    activeSounds.clear();
   }
 
   // --------------------------------------------------------
@@ -170,74 +114,59 @@ export function createAudioManager() {
   function play(name) {
     if (muted) return;
 
-    const pool = soundPools.get(name);
+    const source = sounds[name];
 
-    if (!pool) {
+    if (!source) {
       console.warn(`Unknown Snake sound: ${name}`);
       return;
     }
 
-    const isPriority = PRIORITY_SOUNDS.has(name);
+    // Each playback gets an independent audio element.
+    // This matches the original working implementation.
+    const sound = source.cloneNode(true);
 
-    if (isPriority) {
-      stopAll();
-    } else if (activeSounds.size >= MAX_SIMULTANEOUS_SOUNDS) {
-      return;
+    sound.volume = SOUND_VOLUMES[name] ?? 0.5;
+
+    // Preserve the lower-pitched resume sound.
+    sound.playbackRate = name === 'resume' ? 0.85 : 1;
+
+    activeSounds.add(sound);
+
+    function cleanup() {
+      activeSounds.delete(sound);
+
+      sound.removeEventListener('ended', cleanup);
+      sound.removeEventListener('error', cleanup);
     }
 
-    // Prefer an idle player from the existing pool.
-    let player = pool.find(
-      candidate => !activeSounds.has(candidate)
-    );
+    sound.addEventListener('ended', cleanup);
+    sound.addEventListener('error', cleanup);
 
-    // If every player is busy, reuse the first one.
-    if (!player) {
-      player = pool[0];
-      stopPlayer(player);
-    }
+    // Playback is requested synchronously.
+    // No asynchronous loading or AudioContext resume.
+    const playPromise = sound.play();
 
-    player.volume = SOUND_VOLUMES[name] ?? 0.5;
-    player.playbackRate = name === 'resume' ? 0.85 : 1;
+    if (playPromise !== undefined) {
+      playPromise.catch(error => {
+        // Log failures while investigating Safari.
+        console.warn(
+          `Audio playback failed: ${name}`,
+          error
+        );
 
-    try {
-      player.currentTime = 0;
-    } catch {
-      // Some browsers restrict seeking until loaded.
-    }
-
-    activeSounds.add(player);
-
-    const playback = player.play();
-
-    if (playback && typeof playback.catch === 'function') {
-      playback.catch(error => {
-        activeSounds.delete(player);
-
-        if (error.name !== 'NotAllowedError' &&
-            error.name !== 'AbortError') {
-          console.warn(
-            `Audio playback failed: ${name}`,
-            error
-          );
-        }
+        cleanup();
       });
     }
   }
 
   // --------------------------------------------------------
-  // Player Event Cleanup
+  // Compatibility With Existing Input Module
   // --------------------------------------------------------
 
-  for (const pool of soundPools.values()) {
-    for (const player of pool) {
-      player.addEventListener('ended', () => {
-        activeSounds.delete(player);
-      });
-
-      player.addEventListener('error', () => {
-        activeSounds.delete(player);
-      });
-    }
+  function unlockAudio() {
+    // HTML5 Audio playback is requested directly from
+    // game events. Keep this method because input.js
+    // currently calls audio.unlockAudio().
   }
 
   // --------------------------------------------------------
@@ -253,8 +182,6 @@ export function createAudioManager() {
 
     if (muted) {
       stopAll();
-    } else {
-      unlockAudio();
     }
 
     saveMutedPreference();
