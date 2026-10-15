@@ -128,8 +128,6 @@ export function createAudioManager() {
   }
 
   // Load all sounds after the first interaction.
-  // This avoids creating an AudioContext before iOS
-  // has received a user gesture.
   let preloadStarted = false;
 
   function preloadSounds() {
@@ -176,20 +174,66 @@ export function createAudioManager() {
 
     if (!ctx) return;
 
-    if (ctx.state === 'suspended') {
+    // Call resume directly within the user gesture.
+    // Do not await it before starting the silent source.
+    if (ctx.state !== 'running') {
       ctx.resume().catch(() => {
-        // A later interaction can retry.
+        // A later user interaction can retry.
       });
+    }
+
+    // Start a silent buffer immediately during the gesture.
+    // This helps initialize Web Audio on iOS Safari.
+    try {
+      const silentBuffer = ctx.createBuffer(
+        1,
+        1,
+        ctx.sampleRate
+      );
+
+      const silentSource = ctx.createBufferSource();
+      silentSource.buffer = silentBuffer;
+      silentSource.connect(ctx.destination);
+      silentSource.start(0);
+
+      silentSource.onended = () => {
+        silentSource.disconnect();
+      };
+    } catch {
+      // The next interaction can retry activation.
     }
 
     preloadSounds();
   }
 
-  document.addEventListener('pointerdown', unlockAudio);
+  // Capture the earliest available interaction so audio
+  // is unlocked before gameplay processes that gesture.
   document.addEventListener('touchstart', unlockAudio, {
-    passive: true
+    passive: true,
+    capture: true
   });
-  document.addEventListener('keydown', unlockAudio);
+
+  document.addEventListener('pointerdown', unlockAudio, {
+    capture: true
+  });
+
+  document.addEventListener('keydown', unlockAudio, {
+    capture: true
+  });
+
+  // Safari may suspend audio when switching apps or tabs.
+  // A later interaction will unlock it again.
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && !muted) {
+      const ctx = getContext();
+
+      if (ctx && ctx.state !== 'running') {
+        ctx.resume().catch(() => {
+          // A later gesture can retry.
+        });
+      }
+    }
+  });
 
   // --------------------------------------------------------
   // Sound Playback
@@ -219,7 +263,20 @@ export function createAudioManager() {
       if (
         muted ||
         generation !== playbackGeneration ||
-        !buffer ||
+        !buffer
+      ) {
+        return;
+      }
+
+      // If Safari suspended the context while loading,
+      // attempt to resume it again.
+      if (ctx.state !== 'running') {
+        await ctx.resume();
+      }
+
+      if (
+        muted ||
+        generation !== playbackGeneration ||
         ctx.state !== 'running'
       ) {
         return;
@@ -230,8 +287,9 @@ export function createAudioManager() {
 
       source.buffer = buffer;
 
-      // Resume uses the pause sound at a slightly lower pitch.
-      source.playbackRate.value = name === 'resume' ? 0.85 : 1;
+      // Resume uses the pause sound at a lower pitch.
+      source.playbackRate.value =
+        name === 'resume' ? 0.85 : 1;
 
       gain.gain.value = SOUND_VOLUMES[name] ?? 0.5;
 
