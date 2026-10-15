@@ -2,23 +2,23 @@
 /* ==========================================================
    Snake - Audio Manager
 
-   Responsible for:
-   - Loading sound effects using HTML5 Audio
-   - Playing overlapping sound effects
-   - Supporting iPhone Safari and desktop browsers
-   - Managing mute state and saved preferences
-   - Prioritizing important gameplay sounds
+   HTML5 Audio implementation with reusable sound pools.
 
-   Audio files are stored in public/audio/.
+   Features:
+   - Preloaded MP3 sound effects
+   - Reusable audio players
+   - Overlapping playback
+   - iPhone Safari compatibility
+   - Persistent mute preference
+   - Priority sounds
    ========================================================== */
 
-// Vite's BASE_URL supports local development and GitHub Pages.
 const AUDIO_PATH = `${import.meta.env.BASE_URL}audio/`;
 
 const MUTE_STORAGE_KEY = 'snake-audio-muted';
 
 // ----------------------------------------------------------
-// Audio Configuration
+// Sound Configuration
 // ----------------------------------------------------------
 
 const SOUND_FILES = Object.freeze({
@@ -76,40 +76,72 @@ export function createAudioManager() {
         String(muted)
       );
     } catch {
-      // Preference remains active for this session.
+      // Continue without persistent storage.
     }
   }
 
   // --------------------------------------------------------
-  // Sound Loading
+  // Audio Pools
   // --------------------------------------------------------
 
-  const sounds = new Map();
-
-  for (const [name, filename] of Object.entries(SOUND_FILES)) {
-    const audio = new Audio(
-      `${AUDIO_PATH}${filename}.mp3`
-    );
-
-    audio.preload = 'auto';
-    audio.volume = SOUND_VOLUMES[name] ?? 0.5;
-
-    sounds.set(name, audio);
-  }
-
-  // --------------------------------------------------------
-  // Active Sound Tracking
-  // --------------------------------------------------------
-
+  const soundPools = new Map();
   const activeSounds = new Set();
 
-  function stopAll() {
-    for (const audio of activeSounds) {
-      audio.pause();
-      audio.currentTime = 0;
+  // Two players per cue allow limited overlap.
+  // Frequently played sounds get additional players.
+  const POOL_SIZES = {
+    start: 2,
+    eat: 4,
+    pause: 2,
+    resume: 2,
+    collision: 2,
+    gameOver: 2,
+    highScore: 2
+  };
+
+  function createPlayer(filename) {
+    const player = new Audio();
+
+    player.preload = 'auto';
+    player.src = `${AUDIO_PATH}${filename}.mp3`;
+
+    // Request media loading immediately.
+    player.load();
+
+    return player;
+  }
+
+  for (const [name, filename] of Object.entries(SOUND_FILES)) {
+    const size = POOL_SIZES[name] ?? 2;
+    const pool = [];
+
+    for (let i = 0; i < size; i++) {
+      pool.push(createPlayer(filename));
     }
 
-    activeSounds.clear();
+    soundPools.set(name, pool);
+  }
+
+  // --------------------------------------------------------
+  // Stop and Cleanup
+  // --------------------------------------------------------
+
+  function stopPlayer(player) {
+    player.pause();
+
+    try {
+      player.currentTime = 0;
+    } catch {
+      // Seeking may be unavailable before loading.
+    }
+
+    activeSounds.delete(player);
+  }
+
+  function stopAll() {
+    for (const player of [...activeSounds]) {
+      stopPlayer(player);
+    }
   }
 
   // --------------------------------------------------------
@@ -119,11 +151,16 @@ export function createAudioManager() {
   function unlockAudio() {
     if (muted) return;
 
-    // HTML5 Audio does not require an AudioContext.
-    // Actual playback is initiated by the game after
-    // the user's first interaction.
-    //
-    // Keep this method for compatibility with input.js.
+    // Loading is requested when the manager is created.
+    // This method remains available to input.js and
+    // provides another loading opportunity after a tap.
+    for (const pool of soundPools.values()) {
+      for (const player of pool) {
+        if (player.networkState === HTMLMediaElement.NETWORK_EMPTY) {
+          player.load();
+        }
+      }
+    }
   }
 
   // --------------------------------------------------------
@@ -133,9 +170,9 @@ export function createAudioManager() {
   function play(name) {
     if (muted) return;
 
-    const original = sounds.get(name);
+    const pool = soundPools.get(name);
 
-    if (!original) {
+    if (!pool) {
       console.warn(`Unknown Snake sound: ${name}`);
       return;
     }
@@ -144,47 +181,61 @@ export function createAudioManager() {
 
     if (isPriority) {
       stopAll();
-    } else if (
-      activeSounds.size >= MAX_SIMULTANEOUS_SOUNDS
-    ) {
+    } else if (activeSounds.size >= MAX_SIMULTANEOUS_SOUNDS) {
       return;
     }
 
-    // Clone the audio element to allow overlapping
-    // instances of the same sound.
-    const audio = original.cloneNode(true);
+    // Prefer an idle player from the existing pool.
+    let player = pool.find(
+      candidate => !activeSounds.has(candidate)
+    );
 
-    audio.volume = SOUND_VOLUMES[name] ?? 0.5;
+    // If every player is busy, reuse the first one.
+    if (!player) {
+      player = pool[0];
+      stopPlayer(player);
+    }
 
-    // Resume uses the pause sound at a lower pitch.
-    audio.playbackRate = name === 'resume' ? 0.85 : 1;
+    player.volume = SOUND_VOLUMES[name] ?? 0.5;
+    player.playbackRate = name === 'resume' ? 0.85 : 1;
 
-    // Track active sounds for mute and cleanup.
-    activeSounds.add(audio);
+    try {
+      player.currentTime = 0;
+    } catch {
+      // Some browsers restrict seeking until loaded.
+    }
 
-    const cleanup = () => {
-      activeSounds.delete(audio);
-      audio.removeEventListener('ended', cleanup);
-      audio.removeEventListener('error', cleanup);
-    };
+    activeSounds.add(player);
 
-    audio.addEventListener('ended', cleanup);
-    audio.addEventListener('error', cleanup);
+    const playback = player.play();
 
-    const playPromise = audio.play();
+    if (playback && typeof playback.catch === 'function') {
+      playback.catch(error => {
+        activeSounds.delete(player);
 
-    if (playPromise && typeof playPromise.catch === 'function') {
-      playPromise.catch(error => {
-        cleanup();
-
-        // Autoplay restrictions can reject playback
-        // before the first user interaction.
-        if (error.name !== 'NotAllowedError') {
+        if (error.name !== 'NotAllowedError' &&
+            error.name !== 'AbortError') {
           console.warn(
             `Audio playback failed: ${name}`,
             error
           );
         }
+      });
+    }
+  }
+
+  // --------------------------------------------------------
+  // Player Event Cleanup
+  // --------------------------------------------------------
+
+  for (const pool of soundPools.values()) {
+    for (const player of pool) {
+      player.addEventListener('ended', () => {
+        activeSounds.delete(player);
+      });
+
+      player.addEventListener('error', () => {
+        activeSounds.delete(player);
       });
     }
   }
