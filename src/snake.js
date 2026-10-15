@@ -16,7 +16,10 @@ export const snake = [];
 
 export let direction = { x: 1, y: 0 };
 
-let pendingDirection = null;
+// Store up to two upcoming turns.
+// One direction is consumed per movement tick.
+const MAX_QUEUED_TURNS = 2;
+const directionQueue = [];
 
 // Whether the most recent movement caused growth.
 let grewLastMove = false;
@@ -91,7 +94,7 @@ export function resetSnake() {
   }
 
   direction = { x: 1, y: 0 };
-  pendingDirection = null;
+  directionQueue.length = 0;
 
   pathHistory.length = 0;
 
@@ -112,9 +115,7 @@ export function saveSnakeState() {
     gridRows: GRID_ROWS,
     segments: copyPoints(snake),
     direction: copyPoint(direction),
-    pendingDirection: pendingDirection
-      ? copyPoint(pendingDirection)
-      : null,
+    directionQueue: copyPoints(directionQueue),
     grewLastMove,
     pathHistory: copyPoints(pathHistory)
   };
@@ -134,9 +135,20 @@ export function restoreSnakeState(state) {
 
   direction = copyPoint(state.direction);
 
-  pendingDirection = state.pendingDirection
-    ? copyPoint(state.pendingDirection)
-    : null;
+  // Restore any queued turns so quick inputs are not
+  // lost when returning to the original orientation.
+  directionQueue.length = 0;
+
+  if (Array.isArray(state.directionQueue)) {
+    directionQueue.push(
+      ...copyPoints(
+        state.directionQueue.slice(0, MAX_QUEUED_TURNS)
+      )
+    );
+  } else if (state.pendingDirection) {
+    // Compatibility with previously saved state.
+    directionQueue.push(copyPoint(state.pendingDirection));
+  }
 
   grewLastMove = state.grewLastMove;
 
@@ -149,26 +161,52 @@ export function restoreSnakeState(state) {
    ========================================================== */
 
 export function queueDirection(newDirection) {
-  // Prevent multiple turns during a single game tick.
-  if (pendingDirection !== null) return false;
+  // Validate against the last queued turn, or the
+  // current movement direction if the queue is empty.
+  //
+  // Example:
+  // Moving right -> queue up -> queue left
+  // Both turns are valid and execute on separate ticks.
 
-  // Prevent reversing directly into the body.
-  if (
-    newDirection.x === -direction.x &&
-    newDirection.y === -direction.y
-  ) {
-    return false;
-  }
+  const lastDirection = directionQueue.length > 0
+    ? directionQueue[directionQueue.length - 1]
+    : direction;
 
-  // No need to queue the direction we're already moving.
+  // Ignore repeated inputs in the same direction.
+  // They should not consume buffer space.
   if (
-    newDirection.x === direction.x &&
-    newDirection.y === direction.y
+    newDirection.x === lastDirection.x &&
+    newDirection.y === lastDirection.y
   ) {
     return true;
   }
 
-  pendingDirection = copyPoint(newDirection);
+  // Prevent a direct 180-degree reversal.
+  // Checking against the last queued direction
+  // allows valid rapid cornering without reversing.
+  if (
+    newDirection.x === -lastDirection.x &&
+    newDirection.y === -lastDirection.y
+  ) {
+    return false;
+  }
+
+  // Only allow cardinal movement directions.
+  if (
+    !(
+      (Math.abs(newDirection.x) === 1 && newDirection.y === 0) ||
+      (newDirection.x === 0 && Math.abs(newDirection.y) === 1)
+    )
+  ) {
+    return false;
+  }
+
+  // Do not accumulate more than two future turns.
+  if (directionQueue.length >= MAX_QUEUED_TURNS) {
+    return false;
+  }
+
+  directionQueue.push(copyPoint(newDirection));
   return true;
 }
 
@@ -201,9 +239,10 @@ function checkCollision(newHead, ateFood) {
    ========================================================== */
 
 export function moveSnake(food) {
-  if (pendingDirection !== null) {
-    direction = pendingDirection;
-    pendingDirection = null;
+  // Apply exactly one queued direction per tick.
+  // Additional buffered turns remain for later ticks.
+  if (directionQueue.length > 0) {
+    direction = directionQueue.shift();
   }
 
   const head = snake[0];
@@ -222,8 +261,7 @@ export function moveSnake(food) {
   if (checkCollision(newHead, ateFood)) {
     return {
       collision: true,
-      ateFood: false,
-      won: false
+      ateFood: false
     };
   }
 
@@ -249,8 +287,7 @@ export function moveSnake(food) {
 
   return {
     collision: false,
-    ateFood,
-    won: snake.length === GRID_COLS * GRID_ROWS
+    ateFood
   };
 }
 

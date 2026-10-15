@@ -1,4 +1,3 @@
-
 import {
   getGridDimensions,
   getSnakePath,
@@ -16,6 +15,14 @@ export function createRenderer(canvas) {
 
   const GRID_COLOR = '#35414d';
   const CORNER_RADIUS = 0.35;
+
+  // High Score Mode grid colors.
+  const HIGH_SCORE_GRID_COLOR = '#b89645';
+  const HIGH_SCORE_FLASH_COLOR = '#ffe49a';
+  const HIGH_SCORE_FLASH_DURATION = 1600;
+
+  let highScoreMode = false;
+  let highScoreFlashStart = -1;
 
   // Snake changes color every 10 points.
   const SNAKE_COLORS = [
@@ -155,6 +162,64 @@ export function createRenderer(canvas) {
   }
 
   // ========================================================
+  // High Score Mode
+  // ========================================================
+
+  function activateHighScoreMode(
+    timestamp = performance.now(),
+    playFlash = true
+  ) {
+    highScoreMode = true;
+
+    // A restored game keeps its glow without replaying
+    // the initial celebration.
+    highScoreFlashStart = playFlash ? timestamp : -1;
+  }
+
+  function resetHighScoreMode() {
+    highScoreMode = false;
+    highScoreFlashStart = -1;
+  }
+
+  function getGridAppearance(timestamp) {
+    if (!highScoreMode) {
+      return {
+        color: GRID_COLOR,
+        glow: false,
+        flash: 0
+      };
+    }
+
+    let flash = 0;
+
+    if (highScoreFlashStart >= 0) {
+      const progress = clamp(
+        (timestamp - highScoreFlashStart) /
+        HIGH_SCORE_FLASH_DURATION
+      );
+
+      // Two quick pulses that fade into the persistent glow.
+      flash =
+        Math.pow(1 - progress, 2) *
+        Math.pow(Math.sin(progress * Math.PI * 3), 2);
+
+      if (progress >= 1) {
+        highScoreFlashStart = -1;
+      }
+    }
+
+    return {
+      color: blendColors(
+        HIGH_SCORE_GRID_COLOR,
+        HIGH_SCORE_FLASH_COLOR,
+        flash
+      ),
+      glow: true,
+      flash
+    };
+  }
+
+  // ========================================================
   // Head Animation State
   // ========================================================
 
@@ -270,11 +335,20 @@ export function createRenderer(canvas) {
   // Grid Rendering
   // ========================================================
 
-  function drawGrid(cellSize) {
+  function drawGrid(cellSize, timestamp) {
     const { cols, rows } = getGridDimensions();
+    const appearance = getGridAppearance(timestamp);
 
-    ctx.strokeStyle = GRID_COLOR;
+    ctx.save();
+
+    ctx.strokeStyle = appearance.color;
     ctx.lineWidth = 1;
+
+    if (appearance.glow) {
+      ctx.shadowColor = HIGH_SCORE_FLASH_COLOR;
+      ctx.shadowBlur = 4 + appearance.flash * 9;
+    }
+
     ctx.beginPath();
 
     for (let x = 1; x < cols; x++) {
@@ -292,6 +366,7 @@ export function createRenderer(canvas) {
     }
 
     ctx.stroke();
+    ctx.restore();
   }
 
   // ========================================================
@@ -552,7 +627,6 @@ export function createRenderer(canvas) {
     );
 
     ctx.save();
-
     ctx.translate(head.x, head.y);
     ctx.rotate(angle);
 
@@ -605,7 +679,6 @@ export function createRenderer(canvas) {
       0,
       Math.PI * 2
     );
-
     ctx.fill();
 
     // A subtle highlight over the snout.
@@ -625,7 +698,6 @@ export function createRenderer(canvas) {
       0,
       Math.PI * 2
     );
-
     ctx.fill();
 
     // Draw mouth and tongue behind facial details.
@@ -810,7 +882,6 @@ export function createRenderer(canvas) {
     );
 
     ctx.fill();
-
     ctx.restore();
   }
 
@@ -839,12 +910,13 @@ export function createRenderer(canvas) {
       timestamp
     );
 
-    drawGrid(cellSize);
+    drawGrid(cellSize, timestamp);
 
     if (showSnake) {
       updateHeadAnimations(timestamp);
 
       drawFood(food, cellSize, timestamp);
+
       drawSnake(
         alpha,
         cellSize,
@@ -859,6 +931,8 @@ export function createRenderer(canvas) {
     triggerEat,
     triggerCollision,
     resetHeadAnimations,
+    activateHighScoreMode,
+    resetHighScoreMode,
     COLLISION_DURATION
   };
 }

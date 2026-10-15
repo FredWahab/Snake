@@ -15,7 +15,7 @@ import {
 import { createRenderer } from './renderer.js';
 
 // ==========================================================
-// Game Setup
+// Snake - Game Manager
 // ==========================================================
 
 export function createGame(
@@ -62,10 +62,12 @@ export function createGame(
   let previousBest = highScore;
   let highScoreCelebrated = false;
 
+  // Remains active for the rest of a record-breaking run.
+  let highScoreMode = false;
+
   // ready, running, paused, dying, gameover
   let gameState = 'ready';
   let gameStarted = false;
-  let gameWon = false;
 
   let lastFrameTime = null;
   let elapsedTime = 0;
@@ -141,6 +143,59 @@ export function createGame(
     }
   }
 
+  // Activate the persistent grid and scoreboard celebration.
+  function activateHighScoreMode(timestamp) {
+    if (highScoreMode) return;
+
+    highScoreMode = true;
+
+    renderer.activateHighScoreMode?.(timestamp);
+
+    const gameElement = document.querySelector('.game');
+
+    gameElement?.classList.add('high-score-mode');
+    gameElement?.classList.remove('high-score-intro');
+
+    // Restart the introductory flash animation.
+    void gameElement?.offsetWidth;
+
+    gameElement?.classList.add('high-score-intro');
+  }
+
+  // Clear the visual celebration.
+  function resetHighScoreMode() {
+    highScoreMode = false;
+
+    renderer.resetHighScoreMode?.();
+
+    document.querySelector('.game')?.classList.remove(
+      'high-score-mode',
+      'high-score-intro'
+    );
+  }
+
+  // Restore the correct appearance after orientation changes.
+  function syncHighScoreMode() {
+    const gameElement = document.querySelector('.game');
+
+    gameElement?.classList.toggle(
+      'high-score-mode',
+      highScoreMode
+    );
+
+    // Do not replay the initial flash on rotation.
+    gameElement?.classList.remove('high-score-intro');
+
+    if (highScoreMode) {
+      renderer.activateHighScoreMode?.(
+        performance.now(),
+        false
+      );
+    } else {
+      renderer.resetHighScoreMode?.();
+    }
+  }
+
   // ========================================================
   // Status Overlay Helpers
   // ========================================================
@@ -205,8 +260,14 @@ export function createGame(
     `, true);
   }
 
-  function showEndMessage(won) {
-    const result = won ? 'You Win!' : 'Game Over!';
+  function showEndMessage() {
+    const isNewHighScore =
+      previousBest > 0 &&
+      score > previousBest;
+
+    const result = isNewHighScore
+      ? 'New High Score!'
+      : 'Game Over!';
 
     if (isTouchDevice()) {
       showStatus(
@@ -315,11 +376,11 @@ export function createGame(
       score,
       gameState,
       gameStarted,
-      gameWon,
       activeLayout,
       elapsedTime,
       previousBest,
-      highScoreCelebrated
+      highScoreCelebrated,
+      highScoreMode
     };
   }
 
@@ -329,10 +390,10 @@ export function createGame(
     food = saved.food ? { ...saved.food } : null;
     score = saved.score;
     gameStarted = saved.gameStarted;
-    gameWon = saved.gameWon;
 
     previousBest = saved.previousBest;
     highScoreCelebrated = saved.highScoreCelebrated;
+    highScoreMode = saved.highScoreMode ?? false;
 
     activeLayout = saved.activeLayout;
     displayedLayout = saved.activeLayout;
@@ -343,7 +404,6 @@ export function createGame(
       gameState = 'paused';
     } else if (saved.gameState === 'dying') {
       gameState = 'gameover';
-      gameWon = false;
     } else {
       gameState = saved.gameState;
     }
@@ -359,6 +419,9 @@ export function createGame(
     // across an orientation change.
     renderer.resetHeadAnimations();
 
+    // Restore High Score Mode without restarting its pulse.
+    syncHighScoreMode();
+
     updateScoreDisplay();
 
     awaitingOrientationChoice = false;
@@ -367,7 +430,7 @@ export function createGame(
     if (gameState === 'paused') {
       showPauseMessage();
     } else if (gameState === 'gameover') {
-      showEndMessage(gameWon);
+      showEndMessage();
     } else {
       showStartMessage();
     }
@@ -488,17 +551,18 @@ export function createGame(
     audio?.play('pause');
   }
 
-  function endGame(won = false) {
+  function endGame() {
     gameState = 'gameover';
-    gameWon = won;
 
     elapsedTime = 0;
     collisionStartTime = null;
 
-    showEndMessage(won);
+    // End High Score Mode but retain the saved record.
+    resetHighScoreMode();
 
-    // Separate victory and game-over sounds.
-    audio?.play(won ? 'victory' : 'gameOver');
+    showEndMessage();
+
+    audio?.play('gameOver');
   }
 
   // ========================================================
@@ -508,7 +572,6 @@ export function createGame(
   function beginCollision(timestamp) {
     // Movement stops immediately.
     gameState = 'dying';
-    gameWon = false;
 
     elapsedTime = 0;
     collisionStartTime = timestamp;
@@ -536,7 +599,7 @@ export function createGame(
     const elapsed = timestamp - collisionStartTime;
 
     if (elapsed >= renderer.COLLISION_DURATION) {
-      endGame(false);
+      endGame();
     }
   }
 
@@ -549,11 +612,13 @@ export function createGame(
 
     score = 0;
     gameStarted = false;
-    gameWon = false;
 
     // Reset record tracking for this run.
     previousBest = highScore;
     highScoreCelebrated = false;
+
+    // Restore the ordinary grid appearance.
+    resetHighScoreMode();
 
     updateScoreDisplay();
 
@@ -637,23 +702,20 @@ export function createGame(
       }
 
       updateScoreDisplay();
+      spawnFood();
 
-      if (result.won) {
-        food = null;
-        endGame(true);
-      } else {
-        spawnFood();
-      }
-
-      // Celebrate once when the current run first
-      // beats the record that existed at its start.
+      // Celebrate only when a previously established
+      // record is beaten, and only once per run.
       if (
         !highScoreCelebrated &&
         previousBest > 0 &&
-        score > previousBest &&
-        !result.won
+        score > previousBest
       ) {
         highScoreCelebrated = true;
+
+        // Keep the grid glowing for the rest of the run.
+        activateHighScoreMode(timestamp);
+
         audio?.play('highScore');
       }
     }
@@ -736,6 +798,16 @@ export function createGame(
     configureBoard(activeLayout);
     resetGame();
     showStartMessage();
+
+    // After the introductory gold flash finishes,
+    // switch to the gentle continuous scoreboard pulse.
+    scoreDisplay.addEventListener('animationend', event => {
+      if (event.animationName === 'high-score-intro-pulse') {
+        document.querySelector('.game')?.classList.remove(
+          'high-score-intro'
+        );
+      }
+    });
 
     window.addEventListener(
       'resize',

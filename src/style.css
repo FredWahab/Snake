@@ -102,6 +102,73 @@ body {
 }
 
 /* ==========================================================
+   High Score Mode - Scoreboard Celebration
+   ========================================================== */
+
+#score,
+#high-score {
+  transition:
+    color 0.35s ease,
+    text-shadow 0.35s ease;
+}
+
+/* Activated by game.js when an existing record is broken. */
+.game.high-score-mode #score,
+.game.high-score-mode #high-score {
+  color: #fbbf24;
+
+  animation: high-score-breathe 2.4s ease-in-out infinite;
+}
+
+/* Bright initial celebration when the record is broken. */
+.game.high-score-mode.high-score-intro #score,
+.game.high-score-mode.high-score-intro #high-score {
+  animation: high-score-intro-pulse 0.8s ease-out both;
+}
+
+@keyframes high-score-breathe {
+  0%, 100% {
+    color: #dba947;
+    text-shadow: 0 0 3px rgba(251, 191, 36, 0.2);
+  }
+
+  50% {
+    color: #ffe49a;
+    text-shadow:
+      0 0 8px rgba(251, 191, 36, 0.65),
+      0 0 16px rgba(251, 191, 36, 0.2);
+  }
+}
+
+@keyframes high-score-intro-pulse {
+  0% {
+    color: #ffffff;
+    text-shadow: none;
+  }
+
+  35% {
+    color: #fff3c4;
+    text-shadow:
+      0 0 12px rgba(255, 228, 154, 0.9),
+      0 0 24px rgba(251, 191, 36, 0.6);
+  }
+
+  100% {
+    color: #fbbf24;
+    text-shadow: 0 0 5px rgba(251, 191, 36, 0.4);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .game.high-score-mode #score,
+  .game.high-score-mode #high-score {
+    animation: none;
+    color: #fbbf24;
+    text-shadow: 0 0 5px rgba(251, 191, 36, 0.3);
+  }
+}
+
+/* ==========================================================
    Mute / Unmute Button
    ========================================================== */
 
