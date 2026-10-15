@@ -3,7 +3,7 @@
  // Keyboard and Touch Input
  // ==========================================================
 
- export function setupInput(canvas, game) {
+ export function setupInput(canvas, game, audio) {
 
    // ========================================================
    // Keyboard Controls
@@ -80,9 +80,10 @@
 
      // Short touch: treat as a tap.
      if (distance < SWIPE_THRESHOLD) {
-       game.toggleGame();
-       return;
-     }
+        audio.unlockAudio();
+        game.toggleGame();
+        return;
+      }
 
      // Swipe: use the dominant movement direction.
      let newDirection;

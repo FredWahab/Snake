@@ -180,7 +180,7 @@ const game = createGame(
 );
 
 // Connect keyboard and touchscreen controls.
-setupInput(canvas, game);
+setupInput(canvas, game, audio);
 
 // Initialize game state and start the animation loop.
 game.initialize();

@@ -363,6 +363,7 @@ export function createAudioManager() {
     stopAll,
     isMuted,
     setMuted,
-    toggleMute
+    toggleMute,
+    unlockAudio
   };
 }
