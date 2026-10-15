@@ -1,17 +1,29 @@
 
 /* ==========================================================
    Snake - Audio Manager
+
+   Based on the working Minesweeper audio implementation.
+
+   Responsible for:
+   - Loading and decoding sound effects with Web Audio
+   - Playing gameplay sound effects
+   - Managing mute state and saved preferences
+   - Supporting overlapping sounds
+   - Handling mobile browser audio restrictions
+
+   Audio files are stored in public/audio/.
    ========================================================== */
 
-// Audio assets are stored in public/audio.
 // Vite's BASE_URL supports local development and GitHub Pages.
-
 const AUDIO_PATH = `${import.meta.env.BASE_URL}audio/`;
 
 const MUTE_STORAGE_KEY = 'snake-audio-muted';
 
-// Sound effects used by the game.
-const SOUND_FILES = {
+// ----------------------------------------------------------
+// Audio Configuration
+// ----------------------------------------------------------
+
+const SOUND_FILES = Object.freeze({
   start: 'start',
   eat: 'eat',
   pause: 'pause',
@@ -19,18 +31,29 @@ const SOUND_FILES = {
   collision: 'collision',
   gameOver: 'game-over',
   highScore: 'high-score'
-};
+});
 
-// Individual sound volume adjustments.
-const SOUND_VOLUMES = {
+const SOUND_VOLUMES = Object.freeze({
   start: 0.45,
-  eat: 0.5,
+  eat: 0.50,
   pause: 0.35,
   resume: 0.35,
   collision: 0.55,
   gameOver: 0.55,
   highScore: 0.55
-};
+});
+
+const MAX_SIMULTANEOUS_SOUNDS = 4;
+
+const PRIORITY_SOUNDS = new Set([
+  'collision',
+  'gameOver',
+  'highScore'
+]);
+
+// ----------------------------------------------------------
+// Audio Manager
+// ----------------------------------------------------------
 
 export function createAudioManager() {
 
@@ -69,7 +92,9 @@ export function createAudioManager() {
   let context = null;
 
   function getContext() {
-    if (!AudioContextClass) return null;
+    if (!AudioContextClass) {
+      return null;
+    }
 
     if (!context) {
       context = new AudioContextClass();
@@ -97,7 +122,9 @@ export function createAudioManager() {
     const filename = SOUND_FILES[name];
     const ctx = getContext();
 
-    if (!filename || !ctx) return null;
+    if (!filename || !ctx) {
+      return null;
+    }
 
     const promise = (async () => {
       const response = await fetch(
@@ -127,17 +154,25 @@ export function createAudioManager() {
     }
   }
 
-  // Load all sounds after the first interaction.
+  // --------------------------------------------------------
+  // Sound Preloading
+  // --------------------------------------------------------
+
   let preloadStarted = false;
 
   function preloadSounds() {
-    if (preloadStarted || muted) return;
+    if (preloadStarted || muted) {
+      return;
+    }
 
     preloadStarted = true;
 
     for (const name of Object.keys(SOUND_FILES)) {
       loadSound(name).catch(error => {
-        console.warn(`Could not preload ${name}:`, error);
+        console.warn(
+          `Could not preload ${name}:`,
+          error
+        );
       });
     }
   }
@@ -164,86 +199,68 @@ export function createAudioManager() {
   }
 
   // --------------------------------------------------------
-  // iOS Audio Activation
+  // Mobile Audio Activation
   // --------------------------------------------------------
 
   function unlockAudio() {
-    if (muted) return;
+    if (muted) {
+      return;
+    }
 
     const ctx = getContext();
 
-    if (!ctx) return;
-
-    // Call resume directly within the user gesture.
-    // Do not await it before starting the silent source.
-    if (ctx.state !== 'running') {
-      ctx.resume().catch(() => {
-        // A later user interaction can retry.
-      });
+    if (!ctx) {
+      return;
     }
 
-    // Start a silent buffer immediately during the gesture.
-    // This helps initialize Web Audio on iOS Safari.
-    try {
-      const silentBuffer = ctx.createBuffer(
-        1,
-        1,
-        ctx.sampleRate
-      );
-
-      const silentSource = ctx.createBufferSource();
-      silentSource.buffer = silentBuffer;
-      silentSource.connect(ctx.destination);
-      silentSource.start(0);
-
-      silentSource.onended = () => {
-        silentSource.disconnect();
-      };
-    } catch {
-      // The next interaction can retry activation.
+    if (ctx.state === 'suspended') {
+      ctx.resume().catch(() => {
+        // A later interaction can retry.
+      });
     }
 
     preloadSounds();
   }
 
-  // Capture the earliest available interaction so audio
-  // is unlocked before gameplay processes that gesture.
-  document.addEventListener('touchstart', unlockAudio, {
-    passive: true,
-    capture: true
-  });
+  document.addEventListener(
+    'pointerdown',
+    unlockAudio
+  );
 
-  document.addEventListener('pointerdown', unlockAudio, {
-    capture: true
-  });
+  document.addEventListener(
+    'touchstart',
+    unlockAudio,
+    { passive: true }
+  );
 
-  document.addEventListener('keydown', unlockAudio, {
-    capture: true
-  });
-
-  // Safari may suspend audio when switching apps or tabs.
-  // A later interaction will unlock it again.
-  document.addEventListener('visibilitychange', () => {
-    if (!document.hidden && !muted) {
-      const ctx = getContext();
-
-      if (ctx && ctx.state !== 'running') {
-        ctx.resume().catch(() => {
-          // A later gesture can retry.
-        });
-      }
-    }
-  });
+  document.addEventListener(
+    'keydown',
+    unlockAudio
+  );
 
   // --------------------------------------------------------
   // Sound Playback
   // --------------------------------------------------------
 
   async function play(name) {
-    if (muted) return;
+    if (muted) {
+      return;
+    }
 
     if (!SOUND_FILES[name]) {
-      console.warn(`Unknown sound: ${name}`);
+      console.warn(
+        `Unknown Snake sound: ${name}`
+      );
+      return;
+    }
+
+    const isPriority = PRIORITY_SOUNDS.has(name);
+
+    if (isPriority) {
+      stopAll();
+    } else if (
+      activeSounds.size >= MAX_SIMULTANEOUS_SOUNDS
+    ) {
       return;
     }
 
@@ -252,7 +269,9 @@ export function createAudioManager() {
     try {
       const ctx = getContext();
 
-      if (!ctx) return;
+      if (!ctx) {
+        return;
+      }
 
       if (ctx.state === 'suspended') {
         await ctx.resume();
@@ -263,21 +282,15 @@ export function createAudioManager() {
       if (
         muted ||
         generation !== playbackGeneration ||
-        !buffer
+        !buffer ||
+        ctx.state !== 'running'
       ) {
         return;
       }
 
-      // If Safari suspended the context while loading,
-      // attempt to resume it again.
-      if (ctx.state !== 'running') {
-        await ctx.resume();
-      }
-
       if (
-        muted ||
-        generation !== playbackGeneration ||
-        ctx.state !== 'running'
+        !isPriority &&
+        activeSounds.size >= MAX_SIMULTANEOUS_SOUNDS
       ) {
         return;
       }
@@ -298,15 +311,20 @@ export function createAudioManager() {
 
       source.onended = () => {
         activeSounds.delete(source);
+
         source.disconnect();
         gain.disconnect();
       };
 
       activeSounds.add(source);
+
       source.start(0);
 
     } catch (error) {
-      console.warn(`Audio playback failed: ${name}`, error);
+      console.warn(
+        `Audio playback failed: ${name}`,
+        error
+      );
     }
   }
 
@@ -328,12 +346,17 @@ export function createAudioManager() {
     }
 
     saveMutedPreference();
+
+    return muted;
   }
 
   function toggleMute() {
-    setMuted(!muted);
-    return muted;
+    return setMuted(!muted);
   }
+
+  // --------------------------------------------------------
+  // Public Interface
+  // --------------------------------------------------------
 
   return {
     play,
