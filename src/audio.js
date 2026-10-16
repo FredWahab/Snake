@@ -2,15 +2,18 @@
 /* ==========================================================
    Snake - Audio Manager
 
-   HTML5 Audio implementation.
+   Audio playback powered by Howler.js.
 
    Features:
-   - MP3 sound effects
-   - Independent overlapping playback
+   - Preloaded and decoded MP3 effects
+   - Mobile Safari audio unlocking
+   - Independent overlapping sounds
+   - No delayed playback of unloaded effects
    - Persistent mute preference
-   - Immediate sound cleanup
-   - Compatible with existing game and input modules
+   - Priority sounds
    ========================================================== */
+
+import { Howl, Howler } from 'howler';
 
 const AUDIO_PATH = `${import.meta.env.BASE_URL}audio/`;
 
@@ -40,6 +43,12 @@ const SOUND_VOLUMES = Object.freeze({
   highScore: 0.55
 });
 
+const PRIORITY_SOUNDS = new Set([
+  'collision',
+  'gameOver',
+  'highScore'
+]);
+
 // ----------------------------------------------------------
 // Audio Manager
 // ----------------------------------------------------------
@@ -67,44 +76,86 @@ export function createAudioManager() {
         String(muted)
       );
     } catch {
-      // Preference remains active for this session.
+      // Continue without persistent storage.
     }
   }
+
+  // --------------------------------------------------------
+  // Howler Configuration
+  // --------------------------------------------------------
+
+  // Automatically unlock audio on mobile interactions.
+  Howler.autoUnlock = true;
+
+  // Avoid automatic context suspension between effects.
+  Howler.autoSuspend = false;
 
   // --------------------------------------------------------
   // Sound Loading
   // --------------------------------------------------------
 
-  const sounds = {};
+  const sounds = new Map();
 
   for (const [name, filename] of Object.entries(SOUND_FILES)) {
-    const audio = new Audio(
-      `${AUDIO_PATH}${filename}.mp3`
-    );
 
-    audio.preload = 'auto';
+    const sound = new Howl({
+      src: [`${AUDIO_PATH}${filename}.mp3`],
 
-    sounds[name] = audio;
+      // Use Web Audio for short game effects.
+      html5: false,
+
+      // Begin loading and decoding immediately.
+      preload: true,
+
+      volume: SOUND_VOLUMES[name] ?? 0.5,
+
+      loop: false,
+
+      onloaderror(id, error) {
+        console.warn(
+          `Could not load Snake sound: ${name}`,
+          error
+        );
+      },
+
+      onplayerror(id, error) {
+        console.warn(
+          `Could not play Snake sound: ${name}`,
+          error
+        );
+      }
+    });
+
+    sounds.set(name, sound);
   }
 
   // --------------------------------------------------------
-  // Active Sound Tracking
+  // Stop Playback
   // --------------------------------------------------------
 
-  const activeSounds = new Set();
-
   function stopAll() {
-    for (const sound of activeSounds) {
-      sound.pause();
-
-      try {
-        sound.currentTime = 0;
-      } catch {
-        // Seeking may not be available yet.
-      }
+    for (const sound of sounds.values()) {
+      sound.stop();
     }
+  }
 
-    activeSounds.clear();
+  // --------------------------------------------------------
+  // Mobile Audio Activation
+  // --------------------------------------------------------
+
+  function unlockAudio() {
+    if (muted) return;
+
+    // Howler handles mobile unlocking automatically.
+    // Also request context resumption synchronously
+    // during the user's touch event.
+    const context = Howler.ctx;
+
+    if (context && context.state === 'suspended') {
+      context.resume().catch(() => {
+        // Howler can retry on another interaction.
+      });
+    }
   }
 
   // --------------------------------------------------------
@@ -114,59 +165,29 @@ export function createAudioManager() {
   function play(name) {
     if (muted) return;
 
-    const source = sounds[name];
+    const sound = sounds.get(name);
 
-    if (!source) {
+    if (!sound) {
       console.warn(`Unknown Snake sound: ${name}`);
       return;
     }
 
-    // Each playback gets an independent audio element.
-    // This matches the original working implementation.
-    const sound = source.cloneNode(true);
-
-    sound.volume = SOUND_VOLUMES[name] ?? 0.5;
-
-    // Preserve the lower-pitched resume sound.
-    sound.playbackRate = name === 'resume' ? 0.85 : 1;
-
-    activeSounds.add(sound);
-
-    function cleanup() {
-      activeSounds.delete(sound);
-
-      sound.removeEventListener('ended', cleanup);
-      sound.removeEventListener('error', cleanup);
+    // Do not queue effects that could play late.
+    // Once loaded, the decoded audio is reusable.
+    if (sound.state() !== 'loaded') {
+      return;
     }
 
-    sound.addEventListener('ended', cleanup);
-    sound.addEventListener('error', cleanup);
-
-    // Playback is requested synchronously.
-    // No asynchronous loading or AudioContext resume.
-    const playPromise = sound.play();
-
-    if (playPromise !== undefined) {
-      playPromise.catch(error => {
-        // Log failures while investigating Safari.
-        console.warn(
-          `Audio playback failed: ${name}`,
-          error
-        );
-
-        cleanup();
-      });
+    if (PRIORITY_SOUNDS.has(name)) {
+      stopAll();
     }
-  }
 
-  // --------------------------------------------------------
-  // Compatibility With Existing Input Module
-  // --------------------------------------------------------
+    const id = sound.play();
 
-  function unlockAudio() {
-    // HTML5 Audio playback is requested directly from
-    // game events. Keep this method because input.js
-    // currently calls audio.unlockAudio().
+    // Preserve the slightly slower resume effect.
+    if (name === 'resume') {
+      sound.rate(0.85, id);
+    }
   }
 
   // --------------------------------------------------------
